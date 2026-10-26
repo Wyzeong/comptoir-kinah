@@ -2,6 +2,7 @@ import './style.css';
 import type { Session } from '@supabase/supabase-js';
 import { supabase } from './supabase';
 import { mountPrices } from './prices';
+import { mountCraft } from './craft';
 import { escapeHtml } from './format';
 
 const app = document.querySelector<HTMLDivElement>('#app')!;
@@ -78,9 +79,8 @@ function renderApp(session: Session) {
     <header class="topbar">
       ${brand}
       <nav class="mainnav" aria-label="Navigation">
-        <a class="navlink active" aria-current="page">Marché</a>
-        <a class="navlink disabled" aria-disabled="true" title="Bientôt">Craft</a>
-        <a class="navlink disabled" aria-disabled="true" title="Bientôt">Mon stock</a>
+        <a class="navlink" href="#marche" data-page="marche">Marché</a>
+        <a class="navlink" href="#craft" data-page="craft">Craft</a>
       </nav>
       <details class="user-menu">
         <summary>
@@ -92,7 +92,23 @@ function renderApp(session: Session) {
     </header>
     <main class="content" id="prices"></main>`;
   app.querySelector('#logout')!.addEventListener('click', () => void supabase.auth.signOut());
-  mountPrices(app.querySelector<HTMLElement>('#prices')!, { id: session.user.id });
+
+  const content = app.querySelector<HTMLElement>('#prices')!;
+  const show = () => {
+    const page = location.hash === '#craft' ? 'craft' : 'marche';
+    app.querySelectorAll<HTMLAnchorElement>('.navlink').forEach((a) => {
+      const on = a.dataset.page === page;
+      a.classList.toggle('active', on);
+      if (on) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
+    });
+    content.replaceChildren();
+    const mount = document.createElement('div');
+    content.append(mount);
+    if (page === 'craft') mountCraft(mount);
+    else mountPrices(mount, { id: session.user.id });
+  };
+  window.onhashchange = show;
+  show();
 }
 
 function renderMessage(msg: string) {
