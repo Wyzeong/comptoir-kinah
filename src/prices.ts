@@ -2,6 +2,7 @@ import { supabase } from './supabase';
 import { CATEGORIES, GRADES, categoryLabel, type CategoryKey, type ItemOverview } from './types';
 import { escapeHtml, formatDateTime, formatKinah, parseKinah, sparkline, trendOf } from './format';
 import { ICONS } from './icons';
+import { initCapture } from './capture';
 
 type Filter = CategoryKey | 'all';
 const PERIODS = [
@@ -47,16 +48,7 @@ export function mountPrices(root: HTMLElement, me: { id: string }) {
         </section>
       </div>
 
-      <aside class="panel side">
-        <h2>Mettre à jour par capture</h2>
-        <p class="muted">Envoie une capture de l’hôtel des ventes : les prix détectés seront proposés à la validation.</p>
-        <div class="dropzone" aria-disabled="true">
-          ${ICONS.upload}
-          <span>Glisse une capture ici</span>
-        </div>
-        <button class="btn cyan" disabled>Envoyer une capture</button>
-        <p class="soon">Disponible dans la prochaine version.</p>
-      </aside>
+      <aside class="panel side"></aside>
     </div>
 
     <dialog class="dialog" id="new-item-dialog">
@@ -314,5 +306,6 @@ export function mountPrices(root: HTMLElement, me: { id: string }) {
     }
   });
 
+  initCapture(root.querySelector<HTMLElement>('.side')!, { getItems: () => items, onSaved: load });
   void load();
 }
