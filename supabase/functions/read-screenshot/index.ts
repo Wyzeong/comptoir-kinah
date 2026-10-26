@@ -54,6 +54,55 @@ const MARKET_SCHEMA = {
   required: ['rows'],
 };
 
+// Réflexion réduite au minimum : la lecture d'une capture n'en a pas besoin et c'est beaucoup plus rapide
+function thinkingConfig() {
+  if (MODEL.startsWith('gemini-2.5')) return { thinkingBudget: 0 };
+  if (MODEL.startsWith('gemini-3') || MODEL.includes('latest')) return { thinkingLevel: 'low' };
+  return undefined;
+}
+
+async function callGemini(mimeType: string, image: string, withThinking = true): Promise<Response | 'timeout'> {
+  const started = Date.now();
+  try {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`,
+      {
+        method: 'POST',
+        signal: AbortSignal.timeout(100_000),
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': GEMINI_KEY },
+        body: JSON.stringify({
+          contents: [{
+            role: 'user',
+            parts: [
+              { inline_data: { mime_type: mimeType, data: image } },
+              { text: MARKET_PROMPT },
+            ],
+          }],
+          generationConfig: {
+            temperature: 0,
+            responseMimeType: 'application/json',
+            responseSchema: MARKET_SCHEMA,
+            ...(withThinking && thinkingConfig() ? { thinkingConfig: thinkingConfig() } : {}),
+          },
+        }),
+      },
+    );
+    console.log(`Gemini ${MODEL} : ${res.status} en ${Date.now() - started} ms`);
+    // Si ce modèle refuse le réglage de réflexion, on réessaie sans
+    if (res.status === 400 && withThinking && thinkingConfig()) {
+      const body = await res.clone().text();
+      if (/thinking/i.test(body)) return callGemini(mimeType, image, false);
+    }
+    return res;
+  } catch (e) {
+    if (e instanceof DOMException && (e.name === 'TimeoutError' || e.name === 'AbortError')) {
+      console.error(`Gemini ${MODEL} : pas de réponse après ${Date.now() - started} ms`);
+      return 'timeout';
+    }
+    throw e;
+  }
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors });
   if (req.method !== 'POST') return json({ error: 'Méthode non autorisée.' }, 405);
@@ -79,27 +128,10 @@ Deno.serve(async (req) => {
     if (!MIME_TYPES.includes(mimeType)) return json({ error: 'Format d’image non pris en charge.' }, 400);
     if (mode !== 'market') return json({ error: 'Mode de lecture inconnu.' }, 400);
 
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': GEMINI_KEY },
-        body: JSON.stringify({
-          contents: [{
-            role: 'user',
-            parts: [
-              { inline_data: { mime_type: mimeType, data: image } },
-              { text: MARKET_PROMPT },
-            ],
-          }],
-          generationConfig: {
-            temperature: 0,
-            responseMimeType: 'application/json',
-            responseSchema: MARKET_SCHEMA,
-          },
-        }),
-      },
-    );
+    const res = await callGemini(mimeType, image);
+    if (res === 'timeout') {
+      return json({ error: `Gemini n’a pas répondu à temps (${MODEL}). Réessaie, ou change de modèle.` }, 504);
+    }
 
     if (res.status === 429) {
       return json({ error: 'Limite de l’offre gratuite Gemini atteinte. Réessaie dans une minute.' }, 429);

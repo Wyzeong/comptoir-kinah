@@ -84,9 +84,15 @@ export function initCapture(side: HTMLElement, opts: { getItems: () => ItemOverv
     setStatus('Envoi de la capture à Gemini…');
     try {
       const img = await prepareImage(file);
-      const { data, error } = await supabase.functions.invoke('read-screenshot', {
-        body: { image: img.data, mimeType: img.mimeType, mode: 'market' },
-      });
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 120_000);
+      const { data, error } = await supabase.functions
+        .invoke('read-screenshot', {
+          body: { image: img.data, mimeType: img.mimeType, mode: 'market' },
+          signal: ctrl.signal,
+        })
+        .finally(() => clearTimeout(timer));
+      if (ctrl.signal.aborted) throw new Error('Pas de réponse après 2 minutes. Réessaie, ou change de modèle Gemini.');
       if (error) throw new Error(await functionErrorMessage(error));
       const rows: OcrRow[] = Array.isArray(data?.rows) ? data.rows : [];
       if (rows.length === 0) return setStatus('Aucun objet détecté sur cette capture.', true);
