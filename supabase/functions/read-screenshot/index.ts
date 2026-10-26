@@ -4,6 +4,10 @@ import { createClient } from 'npm:@supabase/supabase-js@2';
 
 const GEMINI_KEY = Deno.env.get('GEMINI_API_KEY') ?? '';
 const MODEL = Deno.env.get('GEMINI_MODEL') ?? 'gemini-3.7-flash';
+// Modèles de secours essayés dans l'ordre si le principal est surchargé (503) ou à court de quota (429)
+const FALLBACKS = (Deno.env.get('GEMINI_FALLBACKS') ?? 'gemini-3.7-flash,gemini-2.5-flash')
+  .split(',').map((m) => m.trim()).filter((m) => m && m !== MODEL);
+const MODELS = [MODEL, ...FALLBACKS];
 const MAX_BASE64 = 8_000_000; // ~6 Mo d'image
 const MIME_TYPES = ['image/png', 'image/jpeg', 'image/webp'];
 
@@ -55,17 +59,17 @@ const MARKET_SCHEMA = {
 };
 
 // Réflexion réduite au minimum : la lecture d'une capture n'en a pas besoin et c'est beaucoup plus rapide
-function thinkingConfig() {
-  if (MODEL.startsWith('gemini-2.5')) return { thinkingBudget: 0 };
-  if (MODEL.startsWith('gemini-3') || MODEL.includes('latest')) return { thinkingLevel: 'low' };
+function thinkingConfig(model: string) {
+  if (model.startsWith('gemini-2.5')) return { thinkingBudget: 0 };
+  if (model.startsWith('gemini-3') || model.includes('latest')) return { thinkingLevel: 'low' };
   return undefined;
 }
 
-async function callGemini(mimeType: string, image: string, withThinking = true): Promise<Response | 'timeout'> {
+async function callGemini(model: string, mimeType: string, image: string, withThinking = true): Promise<Response | 'timeout'> {
   const started = Date.now();
   try {
     const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`,
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
       {
         method: 'POST',
         signal: AbortSignal.timeout(100_000),
@@ -82,21 +86,21 @@ async function callGemini(mimeType: string, image: string, withThinking = true):
             temperature: 0,
             responseMimeType: 'application/json',
             responseSchema: MARKET_SCHEMA,
-            ...(withThinking && thinkingConfig() ? { thinkingConfig: thinkingConfig() } : {}),
+            ...(withThinking && thinkingConfig(model) ? { thinkingConfig: thinkingConfig(model) } : {}),
           },
         }),
       },
     );
-    console.log(`Gemini ${MODEL} : ${res.status} en ${Date.now() - started} ms`);
+    console.log(`Gemini ${model} : ${res.status} en ${Date.now() - started} ms`);
     // Si ce modèle refuse le réglage de réflexion, on réessaie sans
-    if (res.status === 400 && withThinking && thinkingConfig()) {
+    if (res.status === 400 && withThinking && thinkingConfig(model)) {
       const body = await res.clone().text();
-      if (/thinking/i.test(body)) return callGemini(mimeType, image, false);
+      if (/thinking/i.test(body)) return callGemini(model, mimeType, image, false);
     }
     return res;
   } catch (e) {
     if (e instanceof DOMException && (e.name === 'TimeoutError' || e.name === 'AbortError')) {
-      console.error(`Gemini ${MODEL} : pas de réponse après ${Date.now() - started} ms`);
+      console.error(`Gemini ${model} : pas de réponse après ${Date.now() - started} ms`);
       return 'timeout';
     }
     throw e;
@@ -128,18 +132,29 @@ Deno.serve(async (req) => {
     if (!MIME_TYPES.includes(mimeType)) return json({ error: 'Format d’image non pris en charge.' }, 400);
     if (mode !== 'market') return json({ error: 'Mode de lecture inconnu.' }, 400);
 
-    const res = await callGemini(mimeType, image);
-    if (res === 'timeout') {
-      return json({ error: `Gemini n’a pas répondu à temps (${MODEL}). Réessaie, ou change de modèle.` }, 504);
+    let res: Response | 'timeout' = 'timeout';
+    let used = MODEL;
+    for (const model of MODELS) {
+      used = model;
+      res = await callGemini(model, mimeType, image);
+      // Surcharge, quota ou délai dépassé : on passe au modèle suivant
+      if (res === 'timeout' || res.status === 503 || res.status === 429) continue;
+      break;
     }
 
+    if (res === 'timeout') {
+      return json({ error: 'Gemini n’a pas répondu à temps. Réessaie dans quelques minutes.' }, 504);
+    }
+    if (res.status === 503) {
+      return json({ error: 'Les serveurs Gemini sont surchargés en ce moment. Réessaie dans quelques minutes.' }, 503);
+    }
     if (res.status === 429) {
-      return json({ error: 'Limite de l’offre gratuite Gemini atteinte. Réessaie dans une minute.' }, 429);
+      return json({ error: 'Limite de l’offre gratuite Gemini atteinte. Réessaie plus tard.' }, 429);
     }
     if (!res.ok) {
       const detail = await res.text();
-      console.error('Gemini', res.status, detail);
-      return json({ error: `Gemini a répondu ${res.status}. Vérifie le nom du modèle (${MODEL}) et la clé.` }, 502);
+      console.error('Gemini', used, res.status, detail);
+      return json({ error: `Gemini a répondu ${res.status} avec le modèle ${used}.` }, 502);
     }
 
     const data = await res.json();
@@ -148,7 +163,7 @@ Deno.serve(async (req) => {
 
     const parsed = JSON.parse(text);
     const rows = Array.isArray(parsed?.rows) ? parsed.rows : [];
-    return json({ rows, model: MODEL });
+    return json({ rows, model: used });
   } catch (e) {
     console.error(e);
     return json({ error: `Erreur inattendue : ${e instanceof Error ? e.message : String(e)}` }, 500);
