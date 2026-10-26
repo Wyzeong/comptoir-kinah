@@ -2,7 +2,6 @@ import { supabase } from './supabase';
 import { CATEGORIES, GRADES, categoryLabel, type CategoryKey, type ItemOverview } from './types';
 import { escapeHtml, formatDateTime, formatKinah, parseKinah, sparkline, trendOf } from './format';
 import { ICONS } from './icons';
-import { initCapture } from './capture';
 
 type Filter = CategoryKey | 'all';
 const PERIODS = [
@@ -48,7 +47,22 @@ export function mountPrices(root: HTMLElement, me: { id: string }) {
         </section>
       </div>
 
-      <aside class="panel side"></aside>
+      <aside class="panel side">
+        <h2>Saisie rapide</h2>
+        <p class="muted">Tape le nom d’un objet, son prix unitaire, puis Entrée.</p>
+        <form class="quick stack" autocomplete="off">
+          <label>Objet
+            <input name="item" list="item-names" required placeholder="ex. Iron Ore" />
+          </label>
+          <datalist id="item-names"></datalist>
+          <label>Prix unitaire (kinah)
+            <input name="price" inputmode="numeric" required placeholder="ex. 850" />
+          </label>
+          <button class="btn cyan" type="submit">Enregistrer le prix</button>
+          <p class="quick-status" role="status" hidden></p>
+        </form>
+        <ul class="quick-log" aria-label="Prix enregistrés pendant cette session"></ul>
+      </aside>
     </div>
 
     <dialog class="dialog" id="new-item-dialog">
@@ -86,6 +100,10 @@ export function mountPrices(root: HTMLElement, me: { id: string }) {
   const periodEl = root.querySelector<HTMLSelectElement>('.period')!;
   const dialog = root.querySelector<HTMLDialogElement>('#new-item-dialog')!;
   const newItemForm = root.querySelector<HTMLFormElement>('#new-item-form')!;
+  const datalistEl = root.querySelector<HTMLDataListElement>('#item-names')!;
+  const quickForm = root.querySelector<HTMLFormElement>('form.quick')!;
+  const quickStatus = root.querySelector<HTMLElement>('.quick-status')!;
+  const quickLog = root.querySelector<HTMLUListElement>('.quick-log')!;
 
   async function load() {
     const { data, error } = await supabase.from('item_overview').select('*').order('name');
@@ -108,6 +126,9 @@ export function mountPrices(root: HTMLElement, me: { id: string }) {
         <span class="cat-count">${n} objet${n > 1 ? 's' : ''}</span>
       </button>`;
     }).join('');
+
+    datalistEl.innerHTML = items.filter((it) => !it.bound)
+      .map((it) => `<option value="${escapeHtml(it.name)}"></option>`).join('');
 
     titleEl.textContent = filter === 'all' ? 'Tout le marché' : `Marché : ${categoryLabel(filter)}`;
 
@@ -283,6 +304,29 @@ export function mountPrices(root: HTMLElement, me: { id: string }) {
       return;
     }
 
+    if (form === quickForm) {
+      const fd = new FormData(form);
+      const name = (fd.get('item') as string).trim().toLowerCase();
+      const item = items.find((it) => it.name.toLowerCase() === name);
+      const say = (msg: string, isError = false) => {
+        quickStatus.hidden = !msg; quickStatus.textContent = msg; quickStatus.classList.toggle('error', isError);
+      };
+      if (!item) return say('Objet inconnu. Crée-le d’abord avec « Ajouter un objet ».', true);
+      if (item.bound) return say('Cet objet est lié (Bound) : il n’a pas de prix.', true);
+      const price = parseKinah(fd.get('price') as string);
+      if (!price) return say('Entre un prix en kinah, chiffres uniquement.', true);
+      const { error } = await supabase.from('price_records').insert({ item_id: item.id, price });
+      if (error) return say(`Enregistrement impossible : ${error.message}`, true);
+      say('');
+      const li = document.createElement('li');
+      li.innerHTML = `<span>${escapeHtml(item.name)}</span><span class="price">${formatKinah(price)}</span>`;
+      quickLog.prepend(li);
+      form.reset();
+      form.querySelector<HTMLInputElement>('input[name=item]')!.focus();
+      await load();
+      return;
+    }
+
     if (form === newItemForm) {
       const fd = new FormData(form);
       const name = (fd.get('name') as string).trim().replace(/\s+/g, ' ');
@@ -306,6 +350,5 @@ export function mountPrices(root: HTMLElement, me: { id: string }) {
     }
   });
 
-  initCapture(root.querySelector<HTMLElement>('.side')!, { getItems: () => items, onSaved: load });
   void load();
 }
