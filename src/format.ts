@@ -27,17 +27,20 @@ export function trendOf(current: number | null, previous: number | null): Trend 
   return { dir: current > previous ? 'up' : 'down', pct };
 }
 
-/** Petite courbe SVG, valeurs de la plus ancienne à la plus récente. */
-export function sparkline(values: number[], w = 120, h = 32): string {
+/** Petite courbe en aire, valeurs de la plus ancienne à la plus récente. */
+export function sparkline(values: number[], id: string, w = 130, h = 36): string {
   if (values.length < 2) return '<span class="muted">—</span>';
   const min = Math.min(...values);
   const max = Math.max(...values);
   const step = w / (values.length - 1);
-  const y = (v: number) => (max === min ? h / 2 : h - 3 - ((v - min) / (max - min)) * (h - 6));
-  const pts = values.map((v, i) => [Number((i * step).toFixed(1)), Number(y(v).toFixed(1))]);
-  const [lx, ly] = pts[pts.length - 1];
+  const y = (v: number) => (max === min ? h / 2 : h - 4 - ((v - min) / (max - min)) * (h - 8));
+  const pts = values.map((v, i) => `${(i * step).toFixed(1)},${y(v).toFixed(1)}`);
+  const area = `0,${h} ${pts.join(' ')} ${w},${h}`;
   return `<svg class="spark" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" aria-hidden="true">
-    <polyline points="${pts.map((p) => p.join(',')).join(' ')}" fill="none" stroke="currentColor"
-      stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>
-    <circle cx="${lx}" cy="${ly}" r="2.5" fill="currentColor"/></svg>`;
+    <defs><linearGradient id="${id}" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="currentColor" stop-opacity=".35"/>
+      <stop offset="1" stop-color="currentColor" stop-opacity="0"/></linearGradient></defs>
+    <polygon points="${area}" fill="url(#${id})"/>
+    <polyline points="${pts.join(' ')}" fill="none" stroke="currentColor" stroke-width="1.8"
+      stroke-linejoin="round" stroke-linecap="round"/></svg>`;
 }

@@ -24,7 +24,8 @@ async function route(session: Session | null) {
   renderApp(session);
 }
 
-const brand = `<div class="brand"><span class="coin" aria-hidden="true"></span>Comptoir du Kinah</div>`;
+const brand = `<div class="brand"><span class="coin" aria-hidden="true"></span>
+  <span class="brand-text"><span class="brand-main">Comptoir</span><span class="brand-sub">du Kinah</span></span></div>`;
 
 function renderLogin() {
   app.innerHTML = `<main class="gate">
@@ -70,12 +71,24 @@ function renderJoin(session: Session) {
 }
 
 function renderApp(session: Session) {
-  const name = session.user.user_metadata?.full_name ?? session.user.email ?? '';
+  const meta = session.user.user_metadata ?? {};
+  const name = String(meta.custom_claims?.global_name ?? meta.full_name ?? session.user.email ?? '');
+  const avatar = typeof meta.avatar_url === 'string' ? meta.avatar_url : '';
   app.innerHTML = `
     <header class="topbar">
       ${brand}
-      <div class="user"><span>${escapeHtml(String(name))}</span>
-        <button class="btn ghost small" id="logout">Se déconnecter</button></div>
+      <nav class="mainnav" aria-label="Navigation">
+        <a class="navlink active" aria-current="page">Marché</a>
+        <a class="navlink disabled" aria-disabled="true" title="Bientôt">Craft</a>
+        <a class="navlink disabled" aria-disabled="true" title="Bientôt">Mon stock</a>
+      </nav>
+      <details class="user-menu">
+        <summary>
+          ${avatar ? `<img class="avatar" src="${escapeHtml(avatar)}" alt="" />` : '<span class="avatar"></span>'}
+          <span>${escapeHtml(name)}</span>
+        </summary>
+        <div class="user-pop"><button class="btn ghost" id="logout">Se déconnecter</button></div>
+      </details>
     </header>
     <main class="content" id="prices"></main>`;
   app.querySelector('#logout')!.addEventListener('click', () => void supabase.auth.signOut());

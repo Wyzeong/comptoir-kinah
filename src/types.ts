@@ -7,8 +7,18 @@ export const CATEGORIES = [
 ] as const;
 
 export type CategoryKey = (typeof CATEGORIES)[number]['key'];
-
 export const categoryLabel = (k: CategoryKey) => CATEGORIES.find((c) => c.key === k)?.label ?? k;
+
+/** Couleur de rareté affichée dans le jeu. */
+export const GRADES = [
+  { key: 'white', label: 'Blanc' },
+  { key: 'green', label: 'Vert' },
+  { key: 'blue', label: 'Bleu' },
+  { key: 'gold', label: 'Or' },
+  { key: 'orange', label: 'Orange' },
+  { key: 'purple', label: 'Violet' },
+] as const;
+export type GradeKey = (typeof GRADES)[number]['key'];
 
 export interface HistoryEntry {
   id: number;
@@ -22,6 +32,7 @@ export interface ItemOverview {
   id: number;
   name: string;
   category: CategoryKey;
+  grade: GradeKey;
   bound: boolean;
   created_at: string;
   current_price: number | null;
