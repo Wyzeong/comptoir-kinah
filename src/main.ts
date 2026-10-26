@@ -3,6 +3,7 @@ import type { Session } from '@supabase/supabase-js';
 import { supabase } from './supabase';
 import { mountPrices } from './prices';
 import { mountCraft } from './craft';
+import { mountStock } from './stock';
 import { escapeHtml } from './format';
 
 const app = document.querySelector<HTMLDivElement>('#app')!;
@@ -81,6 +82,7 @@ function renderApp(session: Session) {
       <nav class="mainnav" aria-label="Navigation">
         <a class="navlink" href="#marche" data-page="marche">Marché</a>
         <a class="navlink" href="#craft" data-page="craft">Craft</a>
+        <a class="navlink" href="#stock" data-page="stock">Stock</a>
       </nav>
       <details class="user-menu">
         <summary>
@@ -95,7 +97,7 @@ function renderApp(session: Session) {
 
   const content = app.querySelector<HTMLElement>('#prices')!;
   const show = () => {
-    const page = location.hash === '#craft' ? 'craft' : 'marche';
+    const page = location.hash === '#craft' ? 'craft' : location.hash === '#stock' ? 'stock' : 'marche';
     app.querySelectorAll<HTMLAnchorElement>('.navlink').forEach((a) => {
       const on = a.dataset.page === page;
       a.classList.toggle('active', on);
@@ -104,7 +106,8 @@ function renderApp(session: Session) {
     content.replaceChildren();
     const mount = document.createElement('div');
     content.append(mount);
-    if (page === 'craft') mountCraft(mount);
+    if (page === 'craft') mountCraft(mount, { id: session.user.id });
+    else if (page === 'stock') mountStock(mount, { id: session.user.id });
     else mountPrices(mount, { id: session.user.id });
   };
   window.onhashchange = show;

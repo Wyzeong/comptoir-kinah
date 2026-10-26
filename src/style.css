@@ -290,6 +290,18 @@ th .sub { display: block; color: var(--gold); text-transform: none; letter-spaci
 .budget > div { display: flex; flex-direction: column; gap: .3rem; }
 .budget input { width: 12rem; }
 
+.ratio.ok { color: var(--up); }
+.ratio.short { color: var(--down); }
+.price-cell { width: 8.5rem; text-align: right; padding: .3rem .5rem; }
+.price-cell:placeholder-shown { border-color: var(--grade-orange); }
+.hint { margin: 0; padding: .8rem 1.25rem 1rem; font-size: .82rem; color: var(--muted); border-top: 1px solid var(--line); }
+.pad { padding: 1rem 1.25rem; margin: 0; }
+
+/* ---------- Page Stock ---------- */
+.stock-layout { display: grid; grid-template-columns: minmax(0, 1fr) 19rem; gap: 1.75rem; align-items: start; margin-top: 1.5rem; }
+.stock-table td { border-top: 1px solid var(--line-soft); }
+.kinah-field { padding-top: 1rem; border-top: 1px solid var(--line); }
+
 /* Fenêtre modale */
 .dialog {
   border: 1px solid var(--line); border-radius: 12px; padding: 1.6rem;
@@ -299,7 +311,7 @@ th .sub { display: block; color: var(--gold); text-transform: none; letter-spaci
 
 /* ---------- Écrans plus étroits ---------- */
 @media (max-width: 1100px) {
-  .market, .craft { grid-template-columns: 1fr; }
+  .market, .craft, .stock-layout { grid-template-columns: 1fr; }
   .recipe-list { position: static; }
   .side { position: static; }
 }

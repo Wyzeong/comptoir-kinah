@@ -81,7 +81,6 @@ export function mountPrices(root: HTMLElement, me: { id: string }) {
             <select name="grade">${gradeOptions()}</select>
           </label>
         </div>
-        <label class="check"><input type="checkbox" name="bound" /> Objet lié (Bound) : pas de prix</label>
         <label>Prix actuel (kinah), facultatif
           <input name="price" inputmode="numeric" placeholder="ex. 125 000" autocomplete="off" />
         </label>
@@ -127,7 +126,7 @@ export function mountPrices(root: HTMLElement, me: { id: string }) {
       </button>`;
     }).join('');
 
-    datalistEl.innerHTML = items.filter((it) => !it.bound)
+    datalistEl.innerHTML = items
       .map((it) => `<option value="${escapeHtml(it.name)}"></option>`).join('');
 
     titleEl.textContent = filter === 'all' ? 'Tout le marché' : `Marché : ${categoryLabel(filter)}`;
@@ -178,12 +177,10 @@ export function mountPrices(root: HTMLElement, me: { id: string }) {
           <div class="item">
             <span class="item-icon grade-${it.grade}">${ICONS[it.category]}</span>
             <span class="item-name grade-${it.grade}">[${escapeHtml(it.name)}]</span>
-            ${it.bound ? '<span class="badge">Bound</span>' : ''}
           </div>
         </td>
         <td class="muted">${categoryLabel(it.category)}</td>
-        <td class="num price">${it.bound ? '<span class="muted">non vendable</span>'
-          : it.current_price == null ? '<span class="muted">—</span>' : `${formatKinah(it.current_price)} kinah`}</td>
+        <td class="num price">${it.current_price == null ? '<span class="muted">—</span>' : `${formatKinah(it.current_price)} kinah`}</td>
         <td>${trend}</td>
         <td class="spark-cell trend-${t.dir}">${sparkline(periodValues(it), `sp${it.id}`)}</td>
         <td class="center"><span class="stats-btn" title="Voir les détails">${ICONS.stats}</span></td>
@@ -200,7 +197,7 @@ export function mountPrices(root: HTMLElement, me: { id: string }) {
         <div><dt>Relevés</dt><dd>${it.history.length}<small> / 30</small></dd></div>
       </dl>`;
 
-    const form = it.bound ? '' : `
+    const form = `
       <form class="add-price" data-id="${it.id}">
         <label>Nouveau prix
           <input name="price" inputmode="numeric" placeholder="ex. 125 000" required autocomplete="off" />
@@ -312,7 +309,6 @@ export function mountPrices(root: HTMLElement, me: { id: string }) {
         quickStatus.hidden = !msg; quickStatus.textContent = msg; quickStatus.classList.toggle('error', isError);
       };
       if (!item) return say('Objet inconnu. Crée-le d’abord avec « Ajouter un objet ».', true);
-      if (item.bound) return say('Cet objet est lié (Bound) : il n’a pas de prix.', true);
       const price = parseKinah(fd.get('price') as string);
       if (!price) return say('Entre un prix en kinah, chiffres uniquement.', true);
       const { error } = await supabase.from('price_records').insert({ item_id: item.id, price });
@@ -330,17 +326,16 @@ export function mountPrices(root: HTMLElement, me: { id: string }) {
     if (form === newItemForm) {
       const fd = new FormData(form);
       const name = (fd.get('name') as string).trim().replace(/\s+/g, ' ');
-      const bound = fd.get('bound') === 'on';
       const rawPrice = (fd.get('price') as string).trim();
       const price = rawPrice ? parseKinah(rawPrice) : null;
       if (rawPrice && !price) return showError(form, 'Le prix doit être un nombre de kinah.');
 
       const { data, error } = await supabase.from('items')
-        .insert({ name, category: fd.get('category'), grade: fd.get('grade'), bound }).select('id').single();
+        .insert({ name, category: fd.get('category'), grade: fd.get('grade') }).select('id').single();
       if (error) {
         return showError(form, error.code === '23505' ? 'Cet objet existe déjà.' : `Création impossible : ${error.message}`);
       }
-      if (price && !bound) {
+      if (price) {
         const r = await supabase.from('price_records').insert({ item_id: data.id, price });
         if (r.error) alert(`Objet créé, mais le prix n’a pas été enregistré : ${r.error.message}`);
       }

@@ -17,7 +17,7 @@ interface Node {
   required: number;   // quantité demandée à ce niveau
   fromStock: number;  // prise dans le stock
   rest: number;       // à fabriquer ou à acheter
-  mode: 'craft' | 'buy' | 'none'; // none = ni achetable ni craftable (objet lié à fournir)
+  mode: 'craft' | 'buy' | 'none'; // none = objet introuvable dans la base
   crafts: number;
   unit: number | null;
   cost: number;
@@ -27,7 +27,7 @@ interface Node {
 
 type Mode = 'buy' | 'craft';
 
-export function mountCraft(root: HTMLElement) {
+export function mountCraft(root: HTMLElement, me: { id: string }) {
   const items = new Map<number, ItemOverview>();
   const byOutput = new Map<number, Recipe>();
   let recipes: Recipe[] = [];
@@ -59,7 +59,7 @@ export function mountCraft(root: HTMLElement) {
     const [it, rc, inv, wal] = await Promise.all([
       supabase.from('item_overview').select('*'),
       supabase.from('recipes').select('id, output_item_id, output_qty, combo_chance, combo_item_id, recipe_components(item_id, qty)'),
-      supabase.from('inventories').select('item_id, qty'),
+      supabase.from('inventories').select('item_id, qty').eq('user_id', me.id),
       supabase.from('wallets').select('kinah').maybeSingle(),
     ]);
     const err = it.error ?? rc.error ?? inv.error ?? wal.error;
@@ -81,14 +81,14 @@ export function mountCraft(root: HTMLElement) {
 
   function canBuy(id: number) {
     const it = items.get(id);
-    return !!it && !it.bound;
+    return !!it;
   }
 
   function modeOf(id: number): Mode {
     const chosen = modes.get(id);
     if (chosen) return chosen;
     const it = items.get(id);
-    return !it || it.bound || it.current_price == null ? 'craft' : 'buy';
+    return !it || it.current_price == null ? 'craft' : 'buy';
   }
 
   /** Développe l'arbre de fabrication. pool = stock restant (null = valeur marché, sans stock). */
@@ -112,7 +112,7 @@ export function mountCraft(root: HTMLElement) {
       return { itemId, required: qty, fromStock, rest, mode: 'craft', crafts, unit: null,
         cost: children.reduce((s, c) => s + c.cost, 0), children, craftable };
     }
-    const buyable = !!it && !it.bound;
+    const buyable = !!it;
     const unit = buyable ? it!.current_price : null;
     return { itemId, required: qty, fromStock, rest, mode: buyable ? 'buy' : 'none', crafts: 0, unit,
       cost: unit ? unit * rest : 0, children: [], craftable };
@@ -179,12 +179,13 @@ export function mountCraft(root: HTMLElement) {
     const expected = valueCombo ? p * valueCombo.cost + (1 - p) * valueWorst.cost : valueWorst.cost;
     const shown = plan === 'combo' && buyCombo ? buyCombo : buyWorst;
     const materials = flatten(shown, new Map());
+    const shopping = [...materials.entries()].filter(([, m]) => m.buy > 0 || m.missing > 0);
     const toBuy = shown.cost;
     const missingKinah = Math.max(0, toBuy - kinah);
     const unknown = unknownPrices(valueWorst);
 
     const it = items.get(target);
-    const marketPrice = it && !it.bound ? it.current_price : null;
+    const marketPrice = it ? it.current_price : null;
     const direct = marketPrice != null ? marketPrice * count : null;
     const margin = direct != null ? Math.round(direct * (1 - tax / 100) - expected) : null;
 
@@ -198,7 +199,7 @@ export function mountCraft(root: HTMLElement) {
       : card('Prix de revient', `${formatKinah(valueWorst.cost)} k`, 'valeur marché des composants', 'highlight');
 
     const tradeCards = direct == null
-      ? card('Achat direct', 'Non achetable', it?.bound ? 'objet lié' : 'aucun prix relevé')
+      ? card('Achat direct', 'Prix inconnu', 'ajoute un prix depuis la page Marché')
       : card('Achat direct', `${formatKinah(direct)} k`)
         + card('Marge si revente', `${margin! >= 0 ? '+' : '−'}${formatKinah(Math.abs(margin!))} k`, tax ? `taxe de ${tax} % déduite` : '', margin! >= 0 ? 'up' : 'down');
 
@@ -222,41 +223,34 @@ export function mountCraft(root: HTMLElement) {
       ${unknown.length ? `<p class="warn">Prix inconnu, compté à 0 : ${unknown.map(escapeHtml).join(', ')}. Ajoute un prix depuis la page Marché.</p>` : ''}
 
       <section class="panel">
-        <div class="panel-head"><h2>Arbre de fabrication</h2></div>
-        <div class="table-wrap"><table class="tree">
-          <thead><tr><th>Composant</th><th class="num">Requis</th><th>Obtention</th><th class="num">Coût marché</th></tr></thead>
-          <tbody>${treeRows(valueWorst, 0, true)}</tbody>
-        </table></div>
-      </section>
-
-      <section class="panel">
         <div class="panel-head">
-          <h2>Ton stock et tes achats</h2>
+          <h2>Arbre de fabrication</h2>
           ${buyCombo ? `<label class="select-wrap"><span class="sr-only">Scénario</span>
             <select data-set="plan">
               <option value="worst"${plan === 'worst' ? ' selected' : ''}>Prévoir sans combo</option>
               <option value="combo"${plan === 'combo' ? ' selected' : ''}>Prévoir avec combo</option>
             </select>${ICONS.chevron}</label>` : ''}
         </div>
-        <div class="table-wrap"><table class="materials">
-          <thead><tr><th>Objet</th><th class="num">Requis</th><th class="num">En stock</th><th class="num">À acheter</th>
-            <th class="num">Prix unitaire</th><th class="num">Coût</th></tr></thead>
-          <tbody>${[...materials.entries()].map(([id, m]) => {
-            const have = stock.get(id) ?? 0;
-            const buyCell = m.missing > 0
-              ? `<span class="trend down">${m.missing} à fournir</span>`
-              : m.buy > 0 ? `<strong>${m.buy}</strong>`
-              : m.craft > 0 ? `<span class="muted">${m.craft} à crafter</span>` : '<span class="trend up">OK</span>';
-            return `<tr>
-              <td><span class="item-name grade-${gradeOf(id)}">${escapeHtml(nameOf(id))}</span></td>
-              <td class="num">${m.required}</td>
-              <td class="num"><input class="stock-input" type="number" min="0" value="${have}" data-stock="${id}" aria-label="Stock de ${escapeHtml(nameOf(id))}" /></td>
-              <td class="num">${buyCell}</td>
-              <td class="num muted">${m.unit != null ? formatKinah(m.unit) : '—'}</td>
-              <td class="num price">${m.buy > 0 && m.unit != null ? formatKinah(m.buy * m.unit) : '—'}</td>
-            </tr>`;
-          }).join('')}</tbody>
+        <div class="table-wrap"><table class="tree">
+          <thead><tr><th>Composant</th><th class="num">Stock / requis</th><th>Obtention</th>
+            <th class="num">Prix unitaire</th><th class="num">À acheter</th></tr></thead>
+          <tbody>${treeRows(shown, 0, true)}</tbody>
         </table></div>
+        <p class="hint">Le stock est partagé entre les étapes. Modifie-le depuis la page Stock. Tape un prix dans la colonne « Prix unitaire » pour l’enregistrer pour tout le groupe.</p>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head"><h2>Liste d’achats</h2></div>
+        ${shopping.length === 0 ? '<p class="muted pad">Rien à acheter : ton stock couvre tout.</p>' : `
+        <div class="table-wrap"><table class="materials">
+          <thead><tr><th>Objet</th><th class="num">Quantité</th><th class="num">Prix unitaire</th><th class="num">Coût</th></tr></thead>
+          <tbody>${shopping.map(([id, m]) => `<tr>
+              <td><span class="item-name grade-${gradeOf(id)}">${escapeHtml(nameOf(id))}</span></td>
+              <td class="num">${m.missing > 0 ? `<span class="trend down">${m.missing} introuvable</span>` : `<strong>${m.buy}</strong>`}</td>
+              <td class="num muted">${m.missing > 0 ? '—' : m.unit != null ? formatKinah(m.unit) : '<span class="warn-inline">prix inconnu</span>'}</td>
+              <td class="num price">${m.missing > 0 || m.unit == null ? '—' : formatKinah(m.buy * m.unit)}</td>
+            </tr>`).join('')}</tbody>
+        </table></div>`}
         <div class="budget">
           <div><span class="stat-label">Total à acheter</span><span class="stat-value">${formatKinah(toBuy)} k</span></div>
           <label>Tes kinah disponibles <input data-set="kinah" inputmode="numeric" value="${formatKinah(kinah)}" /></label>
@@ -272,15 +266,23 @@ export function mountCraft(root: HTMLElement) {
     if (isRoot) how = `Craft ×${n.crafts}`;
     else if (n.craftable) {
       const m = n.mode === 'craft' ? 'craft' : 'buy';
-      const buyOk = canBuy(n.itemId);
       how = `<div class="toggle" role="group" aria-label="Acheter ou crafter">
-        <button data-action="mode" data-id="${n.itemId}" data-mode="buy" aria-pressed="${m === 'buy'}"${buyOk ? '' : ' disabled'}>Acheter</button>
+        <button data-action="mode" data-id="${n.itemId}" data-mode="buy" aria-pressed="${m === 'buy'}"${canBuy(n.itemId) ? '' : ' disabled'}>Acheter</button>
         <button data-action="mode" data-id="${n.itemId}" data-mode="craft" aria-pressed="${m === 'craft'}">Crafter</button></div>`;
-    } else how = n.mode === 'buy' ? 'Achat' : '<span class="muted">À fournir (lié)</span>';
-    const cost = n.mode === 'none' ? '—' : n.mode === 'buy' && n.unit == null ? '<span class="warn-inline">prix inconnu</span>' : formatKinah(n.cost);
+    } else how = n.mode === 'buy' ? 'Achat' : '<span class="muted">Introuvable</span>';
+
+    const ratio = isRoot ? `${n.required}` : `<span class="ratio ${n.mode === 'craft' ? '' : n.fromStock >= n.required ? 'ok' : 'short'}">${n.fromStock}/${n.required}</span>`;
+    const priceCell = n.mode === 'buy'
+      ? `<input class="price-cell" inputmode="numeric" data-price="${n.itemId}" value="${n.unit != null ? formatKinah(n.unit) : ''}"
+          placeholder="prix ?" aria-label="Prix unitaire de ${label}" />`
+      : '<span class="muted">—</span>';
+    const cost = n.mode !== 'buy' ? '<span class="muted">—</span>'
+      : n.rest === 0 ? '<span class="trend up">en stock</span>'
+      : n.unit == null ? `<span class="warn-inline">${n.rest} × ?</span>`
+      : `${formatKinah(n.cost)}<small class="muted"> (${n.rest})</small>`;
     return `<tr class="depth-${Math.min(depth, 4)}">
         <td><span class="tree-name" style="--depth:${depth}"><span class="item-name grade-${gradeOf(n.itemId)}">${label}</span></span></td>
-        <td class="num">${n.required}</td><td>${how}</td><td class="num price">${cost}</td>
+        <td class="num">${ratio}</td><td>${how}</td><td class="num">${priceCell}</td><td class="num price">${cost}</td>
       </tr>${n.children.map((c) => treeRows(c, depth + 1)).join('')}`;
   }
 
@@ -309,12 +311,14 @@ export function mountCraft(root: HTMLElement) {
       kinah = parseKinah(el.value) ?? 0;
       const { error } = await supabase.from('wallets').upsert({ kinah }, { onConflict: 'user_id' });
       if (error) alert(`Enregistrement des kinah impossible : ${error.message}`);
-    } else if (el.dataset.stock) {
-      const id = Number(el.dataset.stock);
-      const qty = Math.max(0, Math.floor(Number(el.value) || 0));
-      stock.set(id, qty);
-      const { error } = await supabase.from('inventories').upsert({ item_id: id, qty }, { onConflict: 'user_id,item_id' });
-      if (error) alert(`Enregistrement du stock impossible : ${error.message}`);
+    } else if (el.dataset.price) {
+      const price = parseKinah(el.value);
+      const id = Number(el.dataset.price);
+      if (!price || price === items.get(id)?.current_price) { render(); return; }
+      const { error } = await supabase.from('price_records').insert({ item_id: id, price });
+      if (error) { alert(`Enregistrement du prix impossible : ${error.message}`); return; }
+      await load();
+      return;
     } else return;
     render();
   });
