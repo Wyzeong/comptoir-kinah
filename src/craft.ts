@@ -1,5 +1,5 @@
 import { supabase } from './supabase';
-import { WEAPON_TYPES, type ItemOverview, type WeaponTypeKey } from './types';
+import { PROFESSIONS, craftTypeLabel, professionOf, type CraftTypeKey, type ItemOverview, type ProfessionKey } from './types';
 import { escapeHtml, formatKinah, parseKinah } from './format';
 import { ICONS } from './icons';
 import { openRecipeEditor, type RecipeDraft } from './recipe-editor';
@@ -10,7 +10,7 @@ interface Recipe {
   output_qty: number;
   combo_chance: number;
   combo_item_id: number | null;
-  weapon_type: WeaponTypeKey | null;
+  craft_type: CraftTypeKey | null;
   recipe_components: { item_id: number; qty: number }[];
 }
 
@@ -44,12 +44,19 @@ export function mountCraft(root: HTMLElement, me: { id: string }) {
   let tax = 0;
   let plan: Scenario = 'never';
   let search = '';
+  let prof: ProfessionKey | 'none' = 'blacksmithing';
+  let sub: CraftTypeKey | 'all' = 'all';
+  let firstLoad = true;
   const modes = new Map<number, Mode>();
   let loadError: string | null = null;
 
-  root.innerHTML = `<div class="craft">
+  root.innerHTML = `<div class="craft-nav">
+      <nav class="prof-tabs" aria-label="Métier"></nav>
+      <nav class="sub-tabs" aria-label="Catégorie"></nav>
+    </div>
+    <div class="craft">
     <aside class="panel recipe-list">
-      <h2>Recettes</h2>
+      <h2 class="list-title">Recettes</h2>
       <button class="btn primary" data-action="new">Nouvelle recette</button>
       <input type="search" class="search" placeholder="Chercher une recette" aria-label="Chercher une recette" />
       <nav class="recipe-links"></nav>
@@ -57,13 +64,16 @@ export function mountCraft(root: HTMLElement, me: { id: string }) {
     <section class="craft-main"></section>
   </div>`;
   const listEl = root.querySelector<HTMLElement>('.recipe-links')!;
+  const profNav = root.querySelector<HTMLElement>('.prof-tabs')!;
+  const subNav = root.querySelector<HTMLElement>('.sub-tabs')!;
+  const titleEl = root.querySelector<HTMLElement>('.list-title')!;
   const mainEl = root.querySelector<HTMLElement>('.craft-main')!;
   const searchEl = root.querySelector<HTMLInputElement>('.search')!;
 
   async function load() {
     const [it, rc, inv, wal] = await Promise.all([
       supabase.from('item_overview').select('*'),
-      supabase.from('recipes').select('id, output_item_id, output_qty, combo_chance, combo_item_id, weapon_type, recipe_components(item_id, qty)'),
+      supabase.from('recipes').select('id, output_item_id, output_qty, combo_chance, combo_item_id, craft_type, recipe_components(item_id, qty)'),
       supabase.from('inventories').select('item_id, qty').eq('user_id', me.id),
       supabase.from('wallets').select('kinah').maybeSingle(),
     ]);
@@ -76,7 +86,13 @@ export function mountCraft(root: HTMLElement, me: { id: string }) {
     for (const r of recipes) byOutput.set(r.output_item_id, r);
     stock = new Map(((inv.data ?? []) as { item_id: number; qty: number }[]).map((s) => [s.item_id, s.qty]));
     kinah = Number(wal.data?.kinah ?? 0);
-    if (selected == null || !byOutput.has(selected)) selected = sortedRecipes()[0]?.output_item_id ?? null;
+    if (selected != null && !byOutput.has(selected)) selected = null;
+    if (firstLoad && selected == null) {
+      // Ouvre la première rubrique qui contient des recettes
+      const first = sortedRecipes()[0];
+      if (first) { prof = professionOf(first.craft_type) ?? 'none'; selected = first.output_item_id; }
+      firstLoad = false;
+    }
     render();
   }
 
@@ -171,24 +187,36 @@ export function mountCraft(root: HTMLElement, me: { id: string }) {
   // ---------- Rendu ----------
   function render() {
     const q = search.trim().toLowerCase();
-    const shownRecipes = sortedRecipes().filter((r) => !q || nameOf(r.output_item_id).toLowerCase().includes(q));
-    const link = (r: Recipe) => `<button class="recipe-link grade-${gradeOf(r.output_item_id)}${r.output_item_id === selected ? ' active' : ''}"
+    // Onglets métier et sous-catégorie, comme dans le jeu
+    const hasUnclassified = recipes.some((r) => !professionOf(r.craft_type));
+    if (prof === 'none' && !hasUnclassified) prof = 'blacksmithing';
+    const profTabs = [...PROFESSIONS.map((p) => ({ key: p.key as string, label: p.label as string })),
+      ...(hasUnclassified ? [{ key: 'none', label: 'Non classées' }] : [])];
+    profNav.innerHTML = profTabs.map((p) =>
+      `<button class="prof-tab${p.key === prof ? ' active' : ''}" data-action="prof" data-key="${p.key}" aria-pressed="${p.key === prof}">${p.label}</button>`).join('');
+    const subs = PROFESSIONS.find((p) => p.key === prof)?.subs ?? [];
+    subNav.innerHTML = [{ key: 'all', label: 'All' }, ...subs].map((s) =>
+      `<button class="sub-tab${s.key === sub ? ' active' : ''}" data-action="sub" data-key="${s.key}" aria-pressed="${s.key === sub}">${s.label}</button>`).join('');
+    subNav.hidden = prof === 'none';
+
+    const inRubric = (r: Recipe) => (professionOf(r.craft_type) ?? 'none') === prof && (sub === 'all' || r.craft_type === sub);
+    const shownRecipes = sortedRecipes().filter((r) => (q ? nameOf(r.output_item_id).toLowerCase().includes(q) : inRubric(r)));
+    if (!q && (selected == null || !shownRecipes.some((r) => r.output_item_id === selected))) {
+      selected = shownRecipes[0]?.output_item_id ?? null;
+    }
+    titleEl.textContent = q ? 'Résultats de recherche'
+      : prof === 'none' ? 'Non classées'
+      : sub === 'all' ? (PROFESSIONS.find((p) => p.key === prof)?.label ?? '') : craftTypeLabel(sub);
+    listEl.innerHTML = shownRecipes.map((r) => `<button class="recipe-link grade-${gradeOf(r.output_item_id)}${r.output_item_id === selected ? ' active' : ''}"
           data-action="select" data-id="${r.output_item_id}">${escapeHtml(nameOf(r.output_item_id))}
-          ${r.combo_chance > 0 ? `<span class="combo-tag">combo ${Math.round(r.combo_chance * 100)} %</span>` : ''}</button>`;
-    const groups = [...WEAPON_TYPES.map((w) => ({ key: w.key as string, label: w.label })), { key: '', label: 'Autres' }]
-      .map((g) => ({ ...g, list: shownRecipes.filter((r) => (r.weapon_type ?? '') === g.key) }))
-      .filter((g) => g.list.length > 0);
-    const selectedType = selected != null ? byOutput.get(selected)?.weapon_type ?? '' : null;
-    listEl.innerHTML = groups.map((g) => `
-      <details class="recipe-group" ${q || g.key === selectedType ? 'open' : ''}>
-        <summary>${g.label}<span class="count">${g.list.length}</span></summary>
-        <div class="recipe-group-list">${g.list.map(link).join('')}</div>
-      </details>`).join('') || '<p class="muted">Aucune recette.</p>';
+          <span class="recipe-meta">${q || sub === 'all' ? `<span class="type-tag">${craftTypeLabel(r.craft_type)}</span>` : ''}
+          ${r.combo_chance > 0 ? `<span class="combo-tag">combo ${Math.round(r.combo_chance * 100)} %</span>` : ''}</span></button>`)
+      .join('') || `<p class="muted">${q ? 'Aucune recette ne correspond.' : 'Aucune recette dans cette rubrique.'}</p>`;
 
     if (loadError) { mainEl.innerHTML = `<p class="error">Chargement impossible : ${escapeHtml(loadError)}</p>`; return; }
     if (selected == null) {
-      mainEl.innerHTML = `<div class="panel empty"><p>Aucune recette pour l’instant.</p>
-        <button class="btn primary" data-action="new">Créer la première recette</button></div>`;
+      mainEl.innerHTML = `<div class="panel empty"><p>Aucune recette dans cette rubrique pour l’instant.</p>
+        <button class="btn primary" data-action="new">Créer une recette</button></div>`;
       return;
     }
 
@@ -312,10 +340,10 @@ export function mountCraft(root: HTMLElement, me: { id: string }) {
 
   // ---------- Éditeur ----------
   function draftFrom(r: Recipe | undefined, keepOutput: boolean): RecipeDraft {
-    if (!r) return { weaponType: null, outputName: '', outputQty: 1, combo: false, comboPct: 25, comboName: '', components: [] };
+    if (!r) return { craftType: sub !== 'all' ? sub : null, outputName: '', outputQty: 1, combo: false, comboPct: 25, comboName: '', components: [] };
     return {
       recipeId: keepOutput ? r.id : undefined,
-      weaponType: r.weapon_type,
+      craftType: r.craft_type,
       outputName: keepOutput ? nameOf(r.output_item_id) : '',
       outputQty: r.output_qty,
       combo: r.combo_chance > 0,
@@ -334,6 +362,11 @@ export function mountCraft(root: HTMLElement, me: { id: string }) {
       onSaved: async (outputId, next) => {
         selected = outputId;
         await load();
+        // Affiche la rubrique de la recette enregistrée
+        const t = byOutput.get(outputId)?.craft_type ?? null;
+        prof = professionOf(t) ?? 'none';
+        sub = t ?? 'all';
+        render();
         if (next && confirm(`Le combo donne « ${next.outputName} », qui n’a pas encore de recette. La créer maintenant ?`)) {
           editor(`Recette : ${next.outputName}`, next);
         }
@@ -350,6 +383,8 @@ export function mountCraft(root: HTMLElement, me: { id: string }) {
     if (!el) return;
     switch (el.dataset.action) {
       case 'select': selected = Number(el.dataset.id); plan = 'never'; render(); break;
+      case 'prof': prof = el.dataset.key as ProfessionKey | 'none'; sub = 'all'; selected = null; search = ''; searchEl.value = ''; render(); break;
+      case 'sub': sub = el.dataset.key as CraftTypeKey | 'all'; selected = null; search = ''; searchEl.value = ''; render(); break;
       case 'mode': modes.set(Number(el.dataset.id), el.dataset.mode as Mode); render(); break;
       case 'new': editor('Nouvelle recette', draftFrom(undefined, false)); break;
       case 'edit': if (selected != null) editor('Modifier la recette', draftFrom(byOutput.get(selected), true)); break;

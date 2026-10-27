@@ -44,31 +44,43 @@ export interface ItemOverview {
   history: HistoryEntry[]; // du plus récent au plus ancien, 30 max
 }
 
-/** Types d'arme pour ranger les recettes, dans l'ordre d'affichage. */
-export const WEAPON_TYPES = [
-  { key: 'greatsword', label: 'Espadon' },
-  { key: 'sword_shield', label: 'Épée et bouclier' },
-  { key: 'mace_shield', label: 'Masse et bouclier' },
-  { key: 'spellbook', label: 'Grimoire' },
-  { key: 'orb', label: 'Orbe' },
-  { key: 'staff', label: 'Bâton' },
-  { key: 'bow', label: 'Arc' },
-  { key: 'daggers', label: 'Dagues' },
+/** Métiers et sous-catégories de craft, comme dans le menu du jeu (sans « Materials »). */
+export const PROFESSIONS = [
+  { key: 'blacksmithing', label: 'Blacksmithing', subs: [
+    { key: 'greatsword', label: 'Greatsword' }, { key: 'longsword', label: 'Longsword' }, { key: 'dagger', label: 'Dagger' },
+    { key: 'mace', label: 'Mace' }, { key: 'guard', label: 'Guard' }] },
+  { key: 'armorsmithing', label: 'Armorsmithing', subs: [
+    { key: 'helm', label: 'Helm' }, { key: 'pauldrons', label: 'Pauldrons' }, { key: 'top', label: 'Top' },
+    { key: 'legs', label: 'Legs' }, { key: 'gloves', label: 'Gloves' }, { key: 'shoes', label: 'Shoes' }, { key: 'cloak', label: 'Cloak' }] },
+  { key: 'handicrafting', label: 'Handicrafting', subs: [
+    { key: 'bow', label: 'Bow' }, { key: 'staff', label: 'Staff' }, { key: 'necklace', label: 'Necklace' },
+    { key: 'earrings', label: 'Earrings' }, { key: 'ring', label: 'Ring' }, { key: 'bracelet', label: 'Bracelet' }] },
+  { key: 'alchemy', label: 'Alchemy', subs: [
+    { key: 'spellbook', label: 'Spellbook' }, { key: 'orb', label: 'Orb' }, { key: 'potion', label: 'Potion' },
+    { key: 'scroll', label: 'Scroll' }, { key: 'manastone', label: 'Manastone' }] },
 ] as const;
-export type WeaponTypeKey = (typeof WEAPON_TYPES)[number]['key'];
 
-/** Devine le type d'arme d'après le nom anglais de l'objet. */
-export function detectWeaponType(name: string): WeaponTypeKey | null {
+export type ProfessionKey = (typeof PROFESSIONS)[number]['key'];
+export type CraftTypeKey = (typeof PROFESSIONS)[number]['subs'][number]['key'];
+
+export const professionOf = (t: string | null) => PROFESSIONS.find((p) => p.subs.some((s) => s.key === t))?.key ?? null;
+export const craftTypeLabel = (t: string | null) =>
+  PROFESSIONS.flatMap((p) => [...p.subs]).find((s) => s.key === t)?.label ?? 'Non classée';
+
+/** Devine la sous-catégorie d'après le nom anglais de l'objet. */
+export function detectCraftType(name: string): CraftTypeKey | null {
   const n = name.toLowerCase();
-  if (n.includes('greatsword')) return 'greatsword';
-  if (n.includes('mace')) return 'mace_shield';
-  if (n.includes('sword')) return 'sword_shield';
-  if (n.includes('spellbook')) return 'spellbook';
-  if (/\borb\b/.test(n)) return 'orb';
-  if (n.includes('staff')) return 'staff';
-  if (/\bbow\b/.test(n)) return 'bow';
-  if (n.includes('dagger')) return 'daggers';
-  return null;
+  const rules: [RegExp, CraftTypeKey][] = [
+    [/greatsword/, 'greatsword'], [/longsword|\bsword\b/, 'longsword'], [/dagger/, 'dagger'], [/\bmace\b/, 'mace'],
+    [/\bguard\b|\bshield\b/, 'guard'],
+    [/\bhelm|\bhat\b|\bhood\b|headgear/, 'helm'], [/pauldron|shoulder/, 'pauldrons'],
+    [/breastplate|jerkin|tunic|robe|hauberk|chest|\btop\b/, 'top'], [/greaves|leggings|pants|\blegs?\b/, 'legs'],
+    [/glove|gauntlet/, 'gloves'], [/boots|shoes/, 'shoes'], [/cloak|cape/, 'cloak'],
+    [/\bbow\b/, 'bow'], [/\bstaff\b/, 'staff'], [/necklace|amulet|pendant/, 'necklace'], [/earring/, 'earrings'],
+    [/\bring\b/, 'ring'], [/bracelet/, 'bracelet'],
+    [/spellbook/, 'spellbook'], [/\borb\b/, 'orb'], [/potion/, 'potion'], [/scroll/, 'scroll'], [/manastone/, 'manastone'],
+  ];
+  return rules.find(([re]) => re.test(n))?.[1] ?? null;
 }
 
 /** Le Marché n'affiche pas les armes craftées, sauf celles en Orichalcum. */

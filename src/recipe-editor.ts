@@ -1,10 +1,10 @@
 import { supabase } from './supabase';
-import { CATEGORIES, GRADES, WEAPON_TYPES, detectWeaponType, type CategoryKey, type ItemOverview, type WeaponTypeKey } from './types';
+import { CATEGORIES, GRADES, PROFESSIONS, detectCraftType, type CategoryKey, type CraftTypeKey, type ItemOverview } from './types';
 import { escapeHtml } from './format';
 
 export interface RecipeDraft {
   recipeId?: number;
-  weaponType: WeaponTypeKey | null;
+  craftType: CraftTypeKey | null;
   outputName: string;
   outputQty: number;
   combo: boolean;
@@ -65,10 +65,11 @@ export function openRecipeEditor(opts: EditorOptions) {
           </div>
           ${newFields('weapon')}
         </div>
-        <label class="inline">Type d’arme
-          <select name="weaponType">
-            <option value="">Autre</option>
-            ${WEAPON_TYPES.map((w) => `<option value="${w.key}"${d.weaponType === w.key ? ' selected' : ''}>${w.label}</option>`).join('')}
+        <label class="inline">Catégorie de craft
+          <select name="craftType">
+            <option value="">Non classée</option>
+            ${PROFESSIONS.map((p) => `<optgroup label="${p.label}">${p.subs.map((s) =>
+              `<option value="${s.key}"${d.craftType === s.key ? ' selected' : ''}>${s.label}</option>`).join('')}</optgroup>`).join('')}
           </select>
         </label>
       </fieldset>
@@ -117,17 +118,17 @@ export function openRecipeEditor(opts: EditorOptions) {
   }
   form.querySelectorAll<HTMLInputElement>('input[data-role=name]').forEach(refreshNewFields);
 
-  // Le type d'arme suit le nom de l'objet fabriqué tant qu'il n'a pas été choisi à la main
-  const typeSelect = form.querySelector<HTMLSelectElement>('select[name=weaponType]')!;
+  // La catégorie suit le nom de l'objet fabriqué tant qu'elle n'a pas été choisie à la main
+  const typeSelect = form.querySelector<HTMLSelectElement>('select[name=craftType]')!;
   let typeTouched = !!d.recipeId;
-  if (!d.weaponType && d.outputName) typeSelect.value = detectWeaponType(d.outputName) ?? '';
+  if (!d.craftType && d.outputName) typeSelect.value = detectCraftType(d.outputName) ?? '';
   typeSelect.addEventListener('change', () => { typeTouched = true; });
 
   form.addEventListener('input', (e) => {
     const el = e.target as HTMLInputElement;
     if (el.dataset.role === 'name') refreshNewFields(el);
     if (el.name === 'output' && !typeTouched) {
-      const t = detectWeaponType(el.value);
+      const t = detectCraftType(el.value);
       if (t) typeSelect.value = t;
     }
   });
@@ -217,7 +218,7 @@ export function openRecipeEditor(opts: EditorOptions) {
       }
 
       const payload = { output_item_id: outputId, output_qty: outputQty, combo_chance: combo ? comboPct / 100 : 0,
-        combo_item_id: comboId, weapon_type: typeSelect.value || null };
+        combo_item_id: comboId, craft_type: typeSelect.value || null };
       const saved = d.recipeId
         ? await supabase.from('recipes').update(payload).eq('id', d.recipeId).select('id').single()
         : await supabase.from('recipes').upsert(payload, { onConflict: 'output_item_id' }).select('id').single();
@@ -233,7 +234,7 @@ export function openRecipeEditor(opts: EditorOptions) {
 
       // Si le combo mène à un objet sans recette, on propose d'enchaîner sur sa recette « Splendent »
       const next: RecipeDraft | undefined = comboId && !opts.hasRecipe(comboId)
-        ? { weaponType: (typeSelect.value || null) as WeaponTypeKey | null, outputName: comboName, outputQty: 1, combo: false, comboPct: 25, comboName: '', components: [{ name: outputName, qty: 1 }] }
+        ? { craftType: (typeSelect.value || null) as CraftTypeKey | null, outputName: comboName, outputQty: 1, combo: false, comboPct: 25, comboName: '', components: [{ name: outputName, qty: 1 }] }
         : undefined;
       dialog.close();
       await opts.onSaved(outputId, next);
