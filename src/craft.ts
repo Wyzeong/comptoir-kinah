@@ -1,5 +1,5 @@
 import { supabase } from './supabase';
-import { type ItemOverview } from './types';
+import { WEAPON_TYPES, type ItemOverview, type WeaponTypeKey } from './types';
 import { escapeHtml, formatKinah, parseKinah } from './format';
 import { ICONS } from './icons';
 import { openRecipeEditor, type RecipeDraft } from './recipe-editor';
@@ -10,6 +10,7 @@ interface Recipe {
   output_qty: number;
   combo_chance: number;
   combo_item_id: number | null;
+  weapon_type: WeaponTypeKey | null;
   recipe_components: { item_id: number; qty: number }[];
 }
 
@@ -62,7 +63,7 @@ export function mountCraft(root: HTMLElement, me: { id: string }) {
   async function load() {
     const [it, rc, inv, wal] = await Promise.all([
       supabase.from('item_overview').select('*'),
-      supabase.from('recipes').select('id, output_item_id, output_qty, combo_chance, combo_item_id, recipe_components(item_id, qty)'),
+      supabase.from('recipes').select('id, output_item_id, output_qty, combo_chance, combo_item_id, weapon_type, recipe_components(item_id, qty)'),
       supabase.from('inventories').select('item_id, qty').eq('user_id', me.id),
       supabase.from('wallets').select('kinah').maybeSingle(),
     ]);
@@ -170,12 +171,19 @@ export function mountCraft(root: HTMLElement, me: { id: string }) {
   // ---------- Rendu ----------
   function render() {
     const q = search.trim().toLowerCase();
-    listEl.innerHTML = sortedRecipes()
-      .filter((r) => !q || nameOf(r.output_item_id).toLowerCase().includes(q))
-      .map((r) => `<button class="recipe-link grade-${gradeOf(r.output_item_id)}${r.output_item_id === selected ? ' active' : ''}"
+    const shownRecipes = sortedRecipes().filter((r) => !q || nameOf(r.output_item_id).toLowerCase().includes(q));
+    const link = (r: Recipe) => `<button class="recipe-link grade-${gradeOf(r.output_item_id)}${r.output_item_id === selected ? ' active' : ''}"
           data-action="select" data-id="${r.output_item_id}">${escapeHtml(nameOf(r.output_item_id))}
-          ${r.combo_chance > 0 ? `<span class="combo-tag">combo ${Math.round(r.combo_chance * 100)} %</span>` : ''}</button>`)
-      .join('') || '<p class="muted">Aucune recette.</p>';
+          ${r.combo_chance > 0 ? `<span class="combo-tag">combo ${Math.round(r.combo_chance * 100)} %</span>` : ''}</button>`;
+    const groups = [...WEAPON_TYPES.map((w) => ({ key: w.key as string, label: w.label })), { key: '', label: 'Autres' }]
+      .map((g) => ({ ...g, list: shownRecipes.filter((r) => (r.weapon_type ?? '') === g.key) }))
+      .filter((g) => g.list.length > 0);
+    const selectedType = selected != null ? byOutput.get(selected)?.weapon_type ?? '' : null;
+    listEl.innerHTML = groups.map((g) => `
+      <details class="recipe-group" ${q || g.key === selectedType ? 'open' : ''}>
+        <summary>${g.label}<span class="count">${g.list.length}</span></summary>
+        <div class="recipe-group-list">${g.list.map(link).join('')}</div>
+      </details>`).join('') || '<p class="muted">Aucune recette.</p>';
 
     if (loadError) { mainEl.innerHTML = `<p class="error">Chargement impossible : ${escapeHtml(loadError)}</p>`; return; }
     if (selected == null) {
@@ -304,9 +312,10 @@ export function mountCraft(root: HTMLElement, me: { id: string }) {
 
   // ---------- Éditeur ----------
   function draftFrom(r: Recipe | undefined, keepOutput: boolean): RecipeDraft {
-    if (!r) return { outputName: '', outputQty: 1, combo: false, comboPct: 25, comboName: '', components: [] };
+    if (!r) return { weaponType: null, outputName: '', outputQty: 1, combo: false, comboPct: 25, comboName: '', components: [] };
     return {
       recipeId: keepOutput ? r.id : undefined,
+      weaponType: r.weapon_type,
       outputName: keepOutput ? nameOf(r.output_item_id) : '',
       outputQty: r.output_qty,
       combo: r.combo_chance > 0,

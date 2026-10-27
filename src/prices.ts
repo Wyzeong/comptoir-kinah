@@ -1,5 +1,5 @@
 import { supabase } from './supabase';
-import { CATEGORIES, GRADES, categoryLabel, type CategoryKey, type ItemOverview } from './types';
+import { CATEGORIES, GRADES, categoryLabel, inMarket, type CategoryKey, type ItemOverview } from './types';
 import { escapeHtml, formatDateTime, formatKinah, parseKinah, sparkline, trendOf } from './format';
 import { ICONS } from './icons';
 
@@ -107,7 +107,7 @@ export function mountPrices(root: HTMLElement, me: { id: string }) {
   async function load() {
     const { data, error } = await supabase.from('item_overview').select('*').order('name');
     loadError = error ? error.message : null;
-    if (data) items = data as ItemOverview[];
+    if (data) items = (data as ItemOverview[]).filter(inMarket);
     render();
   }
 

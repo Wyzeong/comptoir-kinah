@@ -43,3 +43,34 @@ export interface ItemOverview {
   avg_price: number | null;
   history: HistoryEntry[]; // du plus récent au plus ancien, 30 max
 }
+
+/** Types d'arme pour ranger les recettes, dans l'ordre d'affichage. */
+export const WEAPON_TYPES = [
+  { key: 'greatsword', label: 'Espadon' },
+  { key: 'sword_shield', label: 'Épée et bouclier' },
+  { key: 'mace_shield', label: 'Masse et bouclier' },
+  { key: 'spellbook', label: 'Grimoire' },
+  { key: 'orb', label: 'Orbe' },
+  { key: 'staff', label: 'Bâton' },
+  { key: 'bow', label: 'Arc' },
+  { key: 'daggers', label: 'Dagues' },
+] as const;
+export type WeaponTypeKey = (typeof WEAPON_TYPES)[number]['key'];
+
+/** Devine le type d'arme d'après le nom anglais de l'objet. */
+export function detectWeaponType(name: string): WeaponTypeKey | null {
+  const n = name.toLowerCase();
+  if (n.includes('greatsword')) return 'greatsword';
+  if (n.includes('mace')) return 'mace_shield';
+  if (n.includes('sword')) return 'sword_shield';
+  if (n.includes('spellbook')) return 'spellbook';
+  if (/\borb\b/.test(n)) return 'orb';
+  if (n.includes('staff')) return 'staff';
+  if (/\bbow\b/.test(n)) return 'bow';
+  if (n.includes('dagger')) return 'daggers';
+  return null;
+}
+
+/** Le Marché n'affiche pas les armes craftées, sauf celles en Orichalcum. */
+export const inMarket = (it: { category: CategoryKey; name: string }) =>
+  it.category !== 'weapon' || /orichalcum/i.test(it.name);

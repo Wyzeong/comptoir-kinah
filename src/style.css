@@ -347,3 +347,16 @@ label.inline input { width: 6.5rem; }
 .combo-tag { display: inline-block; font-size: .72rem; padding: .05rem .4rem; margin-left: .35rem; border-radius: 4px; background: rgb(74 168 240 / .15); color: var(--blue); white-space: nowrap; }
 .dialog.wide { width: min(46rem, 96vw); max-height: 92vh; }
 .review-foot { display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; }
+
+/* Recettes rangées par type d'arme */
+.recipe-group { border-top: 1px solid var(--line-soft); }
+.recipe-group:first-of-type { border-top: 0; }
+.recipe-group summary {
+  display: flex; justify-content: space-between; align-items: center; cursor: pointer; list-style: none;
+  padding: .55rem .2rem; font: 600 .9rem/1.2 var(--head); letter-spacing: .05em; text-transform: uppercase; color: var(--text);
+}
+.recipe-group summary::-webkit-details-marker { display: none; }
+.recipe-group summary::after { content: '▸'; color: var(--muted); margin-left: .5rem; }
+.recipe-group[open] summary::after { content: '▾'; }
+.recipe-group summary .count { margin-left: auto; font-size: .78rem; color: var(--muted); font-family: var(--body); }
+.recipe-group-list { display: flex; flex-direction: column; gap: .2rem; padding-bottom: .5rem; }
