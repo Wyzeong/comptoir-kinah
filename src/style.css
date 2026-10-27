@@ -379,3 +379,16 @@ label.inline input { width: 6.5rem; }
   .prof-tabs, .sub-tabs { justify-content: flex-start; flex-wrap: nowrap; overflow-x: auto; }
   .prof-tab, .sub-tab { white-space: nowrap; }
 }
+
+/* Réduction des étapes dans l'arbre */
+.tree-name { display: inline-flex; align-items: center; gap: .35rem; flex-wrap: wrap; }
+.tree-toggle {
+  display: inline-grid; place-items: center; width: 1.4rem; height: 1.4rem; flex: none; padding: 0; cursor: pointer;
+  border: 1px solid var(--line); border-radius: 4px; background: var(--panel-2); color: var(--muted);
+}
+.tree-toggle:hover { color: var(--text); border-color: #3a5684; }
+.tree-toggle .icon { width: .9rem; height: .9rem; transform: rotate(-90deg); transition: transform .15s; }
+.tree-toggle.open .icon { transform: rotate(0deg); }
+.tree-spacer { display: inline-block; width: 1.4rem; flex: none; }
+.folded-note { font-size: .75rem; }
+.subtotal { color: var(--gold); font-style: italic; }

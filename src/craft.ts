@@ -48,6 +48,8 @@ export function mountCraft(root: HTMLElement, me: { id: string }) {
   let sub: CraftTypeKey | 'all' = 'all';
   let firstLoad = true;
   const modes = new Map<number, Mode>();
+  const collapsed = new Set<string>(); // étapes réduites dans l'arbre (chemin d'objets)
+  let foldable: string[] = [];
   let loadError: string | null = null;
 
   root.innerHTML = `<div class="craft-nav">
@@ -165,6 +167,10 @@ export function mountCraft(root: HTMLElement, me: { id: string }) {
     return viaX + (1 - chance(src)) * others;
   }
 
+  function countNodes(n: Node): number {
+    return 1 + n.children.reduce((s, c) => s + countNodes(c), 0);
+  }
+
   function countCombos(n: Node): number {
     return (n.viaCombo ? 1 : 0) + n.children.reduce((s, c) => s + countCombos(c), 0);
   }
@@ -276,16 +282,20 @@ export function mountCraft(root: HTMLElement, me: { id: string }) {
       <section class="panel">
         <div class="panel-head">
           <h2>Arbre de fabrication</h2>
+          <div class="row-end">
+          <button class="btn small" data-action="expand-all">Tout déplier</button>
+          <button class="btn small" data-action="collapse-all">Tout réduire</button>
           ${combos ? `<label class="select-wrap"><span class="sr-only">Scénario</span>
             <select data-set="plan">
               <option value="never"${plan === 'never' ? ' selected' : ''}>Prévoir sans combo</option>
               <option value="always"${plan === 'always' ? ' selected' : ''}>Prévoir avec combo</option>
             </select>${ICONS.chevron}</label>` : ''}
+          </div>
         </div>
         <div class="table-wrap"><table class="tree">
           <thead><tr><th>Composant</th><th class="num">Stock / requis</th><th>Obtention</th>
             <th class="num">Prix unitaire</th><th class="num">À acheter</th></tr></thead>
-          <tbody>${treeRows(shown, 0, true)}</tbody>
+          <tbody>${(foldable = [], treeRows(shown, 0, true, String(shown.itemId)))}</tbody>
         </table></div>
         <p class="hint">Le stock est partagé entre les étapes. Modifie-le depuis la page Stock. Tape un prix dans la colonne « Prix unitaire » pour l’enregistrer pour tout le groupe.</p>
       </section>
@@ -311,7 +321,7 @@ export function mountCraft(root: HTMLElement, me: { id: string }) {
       </section>`;
   }
 
-  function treeRows(n: Node, depth: number, isRoot = false): string {
+  function treeRows(n: Node, depth: number, isRoot = false, key = ''): string {
     const label = escapeHtml(nameOf(n.itemId));
     let how: string;
     if (n.viaCombo) how = `<span class="combo-tag">Combo : en craftant ${escapeHtml(nameOf(n.children[0].itemId))}</span>`;
@@ -328,14 +338,25 @@ export function mountCraft(root: HTMLElement, me: { id: string }) {
       ? `<input class="price-cell" inputmode="numeric" data-price="${n.itemId}" value="${n.unit != null ? formatKinah(n.unit) : ''}"
           placeholder="prix ?" aria-label="Prix unitaire de ${label}" />`
       : '<span class="muted">—</span>';
-    const cost = n.mode !== 'buy' ? '<span class="muted">—</span>'
+    const hasChildren = n.children.length > 0;
+    const isCollapsed = hasChildren && collapsed.has(key);
+    if (hasChildren && !isRoot) foldable.push(key);
+    const toggle = hasChildren
+      ? `<button class="tree-toggle${isCollapsed ? '' : ' open'}" data-action="fold" data-key="${key}" aria-expanded="${!isCollapsed}"
+          aria-label="${isCollapsed ? 'Déplier' : 'Réduire'} les étapes de ${label}">${ICONS.chevron}</button>`
+      : '<span class="tree-spacer"></span>';
+    const hidden = isCollapsed ? countNodes(n) - 1 : 0;
+    const cost = n.mode === 'craft' && isCollapsed
+      ? `<span class="subtotal">${formatKinah(n.cost)}</span>`
+      : n.mode !== 'buy' ? '<span class="muted">—</span>'
       : n.rest === 0 ? '<span class="trend up">en stock</span>'
       : n.unit == null ? `<span class="warn-inline">${n.rest} × ?</span>`
       : `${formatKinah(n.cost)}<small class="muted"> (${n.rest})</small>`;
     return `<tr class="depth-${Math.min(depth, 4)}">
-        <td><span class="tree-name" style="--depth:${depth}"><span class="item-name grade-${gradeOf(n.itemId)}">${label}</span></span></td>
+        <td><span class="tree-name" style="--depth:${depth}">${toggle}<span class="item-name grade-${gradeOf(n.itemId)}">${label}</span>
+          ${hidden ? `<small class="muted folded-note">${hidden} étape${hidden > 1 ? 's' : ''} masquée${hidden > 1 ? 's' : ''}</small>` : ''}</span></td>
         <td class="num">${ratio}</td><td>${how}</td><td class="num">${priceCell}</td><td class="num price">${cost}</td>
-      </tr>${n.children.map((c) => treeRows(c, depth + 1)).join('')}`;
+      </tr>${isCollapsed ? '' : n.children.map((c) => treeRows(c, depth + 1, false, `${key}/${c.itemId}`)).join('')}`;
   }
 
   // ---------- Éditeur ----------
@@ -386,6 +407,14 @@ export function mountCraft(root: HTMLElement, me: { id: string }) {
       case 'prof': prof = el.dataset.key as ProfessionKey | 'none'; sub = 'all'; selected = null; search = ''; searchEl.value = ''; render(); break;
       case 'sub': sub = el.dataset.key as CraftTypeKey | 'all'; selected = null; search = ''; searchEl.value = ''; render(); break;
       case 'mode': modes.set(Number(el.dataset.id), el.dataset.mode as Mode); render(); break;
+      case 'fold': {
+        const k = el.dataset.key!;
+        if (collapsed.has(k)) collapsed.delete(k); else collapsed.add(k);
+        render();
+        break;
+      }
+      case 'expand-all': collapsed.clear(); render(); break;
+      case 'collapse-all': for (const k of foldable) collapsed.add(k); render(); break;
       case 'new': editor('Nouvelle recette', draftFrom(undefined, false)); break;
       case 'edit': if (selected != null) editor('Modifier la recette', draftFrom(byOutput.get(selected), true)); break;
       case 'duplicate':
