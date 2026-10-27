@@ -18,6 +18,7 @@ interface Node {
   itemId: number;
   required: number;
   fromStock: number;
+  available: number; // stock encore disponible en arrivant à cette étape
   rest: number;
   mode: 'craft' | 'buy' | 'none';
   crafts: number;
@@ -124,6 +125,7 @@ export function mountCraft(root: HTMLElement, me: { id: string }) {
     const it = items.get(itemId);
     const recipe = byOutput.get(itemId);
     let fromStock = 0;
+    const available = pool ? pool.get(itemId) ?? 0 : 0;
     if (pool && !force) {
       const have = pool.get(itemId) ?? 0;
       fromStock = Math.min(have, qty);
@@ -131,7 +133,7 @@ export function mountCraft(root: HTMLElement, me: { id: string }) {
     }
     const rest = qty - fromStock;
     const craftable = !!recipe && !path.includes(itemId);
-    const base = { itemId, required: qty, fromStock, rest, craftable, viaCombo: false };
+    const base = { itemId, required: qty, fromStock, available, rest, craftable, viaCombo: false };
 
     if (craftable && (force || modeOf(itemId) === 'craft')) {
       const crafts = Math.ceil(rest / recipe!.output_qty);
@@ -297,7 +299,7 @@ export function mountCraft(root: HTMLElement, me: { id: string }) {
             <th class="num">Prix unitaire</th><th class="num">À acheter</th></tr></thead>
           <tbody>${(foldable = [], treeRows(shown, 0, true, String(shown.itemId)))}</tbody>
         </table></div>
-        <p class="hint">Le stock est partagé entre les étapes. Modifie-le depuis la page Stock. Tape un prix dans la colonne « Prix unitaire » pour l’enregistrer pour tout le groupe.</p>
+        <p class="hint">Le stock est partagé entre les étapes : modifie-le avec − et + ou en tapant la quantité possédée. Tape un prix dans la colonne « Prix unitaire » pour l’enregistrer pour tout le groupe.</p>
       </section>
 
       <section class="panel">
@@ -333,7 +335,15 @@ export function mountCraft(root: HTMLElement, me: { id: string }) {
         <button data-action="mode" data-id="${n.itemId}" data-mode="craft" aria-pressed="${m === 'craft'}">Crafter</button></div>`;
     } else how = n.mode === 'buy' ? 'Achat' : '<span class="muted">Introuvable</span>';
 
-    const ratio = isRoot ? `${n.required}` : `<span class="ratio ${n.mode === 'craft' ? '' : n.fromStock >= n.required ? 'ok' : 'short'}">${n.fromStock}/${n.required}</span>`;
+    const have = stock.get(n.itemId) ?? 0;
+    const state = n.mode === 'craft' ? '' : n.fromStock >= n.required ? 'ok' : 'short';
+    const ratio = isRoot ? `${n.required}` : `<div class="stock-edit ${state}"
+        title="Tu en possèdes ${have}. ${n.fromStock} utilisé${n.fromStock > 1 ? 's' : ''} à cette étape, ${n.required} requis.">
+        <button type="button" data-action="stock-dec" data-id="${n.itemId}" aria-label="Retirer 1 ${label} du stock"${have > 0 ? '' : ' disabled'}>−</button>
+        <input class="stock-cell" type="number" min="0" value="${have}" data-stockedit="${n.itemId}" aria-label="Stock de ${label}" />
+        <button type="button" data-action="stock-inc" data-id="${n.itemId}" aria-label="Ajouter 1 ${label} au stock">+</button>
+        <span class="req">/ ${n.required}</span>
+      </div>${have > n.available ? `<small class="used-before">dont ${have - n.available} déjà utilisé${have - n.available > 1 ? 's' : ''} plus haut</small>` : ''}`;
     const priceCell = n.mode === 'buy'
       ? `<input class="price-cell" inputmode="numeric" data-price="${n.itemId}" value="${n.unit != null ? formatKinah(n.unit) : ''}"
           placeholder="prix ?" aria-label="Prix unitaire de ${label}" />`
@@ -396,6 +406,22 @@ export function mountCraft(root: HTMLElement, me: { id: string }) {
     });
   }
 
+  // ---------- Stock modifié depuis l'arbre ----------
+  const saveTimers = new Map<number, number>();
+  function setStock(itemId: number, qty: number) {
+    stock.set(itemId, Math.max(0, qty));
+    render();
+    // Enregistrement groupé : plusieurs clics rapides sur + ou − ne font qu'un envoi
+    clearTimeout(saveTimers.get(itemId));
+    saveTimers.set(itemId, window.setTimeout(async () => {
+      const value = stock.get(itemId) ?? 0;
+      const { error } = value > 0
+        ? await supabase.from('inventories').upsert({ item_id: itemId, qty: value, updated_at: new Date().toISOString() }, { onConflict: 'user_id,item_id' })
+        : await supabase.from('inventories').delete().eq('user_id', me.id).eq('item_id', itemId);
+      if (error) alert(`Enregistrement du stock impossible : ${error.message}`);
+    }, 400));
+  }
+
   // ---------- Événements ----------
   searchEl.addEventListener('input', () => { search = searchEl.value; render(); });
 
@@ -414,6 +440,11 @@ export function mountCraft(root: HTMLElement, me: { id: string }) {
         break;
       }
       case 'expand-all': collapsed.clear(); render(); break;
+      case 'stock-inc': case 'stock-dec': {
+        const id = Number(el.dataset.id);
+        setStock(id, (stock.get(id) ?? 0) + (el.dataset.action === 'stock-inc' ? 1 : -1));
+        break;
+      }
       case 'collapse-all': for (const k of foldable) collapsed.add(k); render(); break;
       case 'new': editor('Nouvelle recette', draftFrom(undefined, false)); break;
       case 'edit': if (selected != null) editor('Modifier la recette', draftFrom(byOutput.get(selected), true)); break;
@@ -434,6 +465,9 @@ export function mountCraft(root: HTMLElement, me: { id: string }) {
       kinah = parseKinah(el.value) ?? 0;
       const { error } = await supabase.from('wallets').upsert({ kinah }, { onConflict: 'user_id' });
       if (error) alert(`Enregistrement des kinah impossible : ${error.message}`);
+    } else if (el.dataset.stockedit) {
+      setStock(Number(el.dataset.stockedit), Math.floor(Number(el.value) || 0));
+      return;
     } else if (el.dataset.price) {
       const price = parseKinah(el.value);
       const id = Number(el.dataset.price);

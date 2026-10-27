@@ -392,3 +392,20 @@ label.inline input { width: 6.5rem; }
 .tree-spacer { display: inline-block; width: 1.4rem; flex: none; }
 .folded-note { font-size: .75rem; }
 .subtotal { color: var(--gold); font-style: italic; }
+
+/* Stock modifiable dans l'arbre */
+.stock-edit { display: inline-flex; align-items: center; justify-content: flex-end; gap: .25rem; white-space: nowrap; }
+.stock-edit button {
+  width: 1.6rem; height: 1.6rem; padding: 0; cursor: pointer; font: 600 1rem/1 var(--body);
+  border: 1px solid var(--line); border-radius: 4px; background: var(--panel-2); color: var(--text);
+}
+.stock-edit button:hover:not(:disabled) { border-color: #3a5684; }
+.stock-edit button:disabled { opacity: .35; cursor: not-allowed; }
+.stock-cell { width: 3.6rem; text-align: center; padding: .25rem .2rem; -moz-appearance: textfield; }
+.stock-cell::-webkit-inner-spin-button, .stock-cell::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+.stock-edit .req { min-width: 2.6rem; text-align: left; color: var(--muted); }
+.stock-edit.ok .stock-cell { color: var(--up); border-color: rgb(63 207 124 / .45); }
+.stock-edit.short .stock-cell { color: var(--down); border-color: rgb(240 85 92 / .45); }
+.tree td:first-child { min-width: 19rem; }
+.tree .tree-name { flex-wrap: nowrap; }
+.used-before { display: block; font-size: .72rem; color: var(--muted); margin-top: .15rem; white-space: nowrap; }
