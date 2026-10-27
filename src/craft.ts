@@ -2,6 +2,7 @@ import { supabase } from './supabase';
 import { type ItemOverview } from './types';
 import { escapeHtml, formatKinah, parseKinah } from './format';
 import { ICONS } from './icons';
+import { openRecipeEditor, type RecipeDraft } from './recipe-editor';
 
 interface Recipe {
   id: number;
@@ -14,18 +15,20 @@ interface Recipe {
 
 interface Node {
   itemId: number;
-  required: number;   // quantité demandée à ce niveau
-  fromStock: number;  // prise dans le stock
-  rest: number;       // à fabriquer ou à acheter
-  mode: 'craft' | 'buy' | 'none'; // none = objet introuvable dans la base
+  required: number;
+  fromStock: number;
+  rest: number;
+  mode: 'craft' | 'buy' | 'none';
   crafts: number;
   unit: number | null;
   cost: number;
   children: Node[];
   craftable: boolean;
+  viaCombo: boolean; // obtenu par le combo de son premier enfant (étape « Splendent » sautée)
 }
 
 type Mode = 'buy' | 'craft';
+type Scenario = 'never' | 'always';
 
 export function mountCraft(root: HTMLElement, me: { id: string }) {
   const items = new Map<number, ItemOverview>();
@@ -36,9 +39,9 @@ export function mountCraft(root: HTMLElement, me: { id: string }) {
 
   let selected: number | null = null;
   let count = 1;
-  let comboPct: number | null = null;
+  let comboPct: number | null = null; // réglage de la page, appliqué à tous les combos de l'arbre
   let tax = 0;
-  let plan: 'worst' | 'combo' = 'worst';
+  let plan: Scenario = 'never';
   let search = '';
   const modes = new Map<number, Mode>();
   let loadError: string | null = null;
@@ -46,6 +49,7 @@ export function mountCraft(root: HTMLElement, me: { id: string }) {
   root.innerHTML = `<div class="craft">
     <aside class="panel recipe-list">
       <h2>Recettes</h2>
+      <button class="btn primary" data-action="new">Nouvelle recette</button>
       <input type="search" class="search" placeholder="Chercher une recette" aria-label="Chercher une recette" />
       <nav class="recipe-links"></nav>
     </aside>
@@ -78,21 +82,26 @@ export function mountCraft(root: HTMLElement, me: { id: string }) {
   const nameOf = (id: number) => items.get(id)?.name ?? `Objet n°${id}`;
   const gradeOf = (id: number) => items.get(id)?.grade ?? 'white';
   const sortedRecipes = () => [...recipes].sort((a, b) => nameOf(a.output_item_id).localeCompare(nameOf(b.output_item_id)));
-
-  function canBuy(id: number) {
-    const it = items.get(id);
-    return !!it;
-  }
+  const chance = (r: Recipe) => (comboPct ?? r.combo_chance * 100) / 100;
 
   function modeOf(id: number): Mode {
     const chosen = modes.get(id);
     if (chosen) return chosen;
-    const it = items.get(id);
-    return !it || it.current_price == null ? 'craft' : 'buy';
+    return items.get(id)?.current_price == null ? 'craft' : 'buy';
   }
 
-  /** Développe l'arbre de fabrication. pool = stock restant (null = valeur marché, sans stock). */
-  function expand(itemId: number, qty: number, pool: Map<number, number> | null, path: number[], force = false): Node {
+  /** Recette X dont le combo donne directement `itemId`, si X est un composant de la recette de `itemId` et qu'on crafte X. */
+  function comboSource(itemId: number, path: number[]): Recipe | null {
+    const own = byOutput.get(itemId);
+    if (!own) return null;
+    const src = recipes.find((r) => r.combo_item_id === itemId && r.combo_chance > 0
+      && own.recipe_components.some((c) => c.item_id === r.output_item_id));
+    if (!src || path.includes(src.output_item_id) || modeOf(src.output_item_id) === 'buy') return null;
+    return src;
+  }
+
+  /** Développe l'arbre. pool = stock restant (null = valeur marché sans stock). */
+  function expand(itemId: number, qty: number, pool: Map<number, number> | null, path: number[], scen: Scenario, force = false): Node {
     const it = items.get(itemId);
     const recipe = byOutput.get(itemId);
     let fromStock = 0;
@@ -103,40 +112,50 @@ export function mountCraft(root: HTMLElement, me: { id: string }) {
     }
     const rest = qty - fromStock;
     const craftable = !!recipe && !path.includes(itemId);
+    const base = { itemId, required: qty, fromStock, rest, craftable, viaCombo: false };
 
     if (craftable && (force || modeOf(itemId) === 'craft')) {
       const crafts = Math.ceil(rest / recipe!.output_qty);
-      const children = crafts > 0
-        ? recipe!.recipe_components.map((c) => expand(c.item_id, c.qty * crafts, pool, [...path, itemId]))
-        : [];
-      return { itemId, required: qty, fromStock, rest, mode: 'craft', crafts, unit: null,
-        cost: children.reduce((s, c) => s + c.cost, 0), children, craftable };
+      const sub = [...path, itemId];
+      const src = scen === 'always' ? comboSource(itemId, path) : null;
+      let children: Node[] = [];
+      if (crafts > 0 && src) {
+        // Combo réussi : on crafte X et on obtient directement cet objet, sa propre recette est sautée
+        children = [expand(src.output_item_id, crafts, pool, sub, scen, true)];
+      } else if (crafts > 0) {
+        children = recipe!.recipe_components.map((c) => expand(c.item_id, c.qty * crafts, pool, sub, scen));
+      }
+      return { ...base, mode: 'craft', crafts, unit: null, cost: children.reduce((s, c) => s + c.cost, 0), children, viaCombo: !!src };
     }
-    const buyable = !!it;
-    const unit = buyable ? it!.current_price : null;
-    return { itemId, required: qty, fromStock, rest, mode: buyable ? 'buy' : 'none', crafts: 0, unit,
-      cost: unit ? unit * rest : 0, children: [], craftable };
+    const unit = it ? it.current_price : null;
+    return { ...base, mode: it ? 'buy' : 'none', crafts: 0, unit, cost: unit ? unit * rest : 0, children: [] };
   }
 
-  /** Combo applicable à la cible : 'skip' = une recette en amont peut donner directement la cible. */
-  function comboContext(targetId: number) {
-    const own = byOutput.get(targetId);
-    const source = recipes.find((r) => r.combo_item_id === targetId && r.combo_chance > 0
-      && own?.recipe_components.some((c) => c.item_id === r.output_item_id));
-    if (source) return { kind: 'skip' as const, source };
-    if (own && own.combo_item_id && own.combo_chance > 0) return { kind: 'bonus' as const, source: own };
-    return null;
+  /** Coût moyen attendu (valeur marché) : à chaque étape sautable, combo avec sa probabilité. */
+  function expectedCost(itemId: number, qty: number, path: number[], force = false): number {
+    const it = items.get(itemId);
+    const recipe = byOutput.get(itemId);
+    const craftable = !!recipe && !path.includes(itemId);
+    if (!(craftable && (force || modeOf(itemId) === 'craft'))) return (it?.current_price ?? 0) * qty;
+    const crafts = Math.ceil(qty / recipe!.output_qty);
+    const sub = [...path, itemId];
+    const src = comboSource(itemId, path);
+    if (!src) return recipe!.recipe_components.reduce((s, c) => s + expectedCost(c.item_id, c.qty * crafts, sub), 0);
+    const viaX = expectedCost(src.output_item_id, crafts, sub, true);
+    const others = recipe!.recipe_components
+      .filter((c) => c.item_id !== src.output_item_id)
+      .reduce((s, c) => s + expectedCost(c.item_id, c.qty * crafts, sub), 0);
+    return viaX + (1 - chance(src)) * others;
   }
 
-  function flatten(n: Node, acc: Map<number, { required: number; fromStock: number; buy: number; missing: number; craft: number; unit: number | null }>, isRoot = true) {
-    if (!isRoot) {
-      const a = acc.get(n.itemId) ?? { required: 0, fromStock: 0, buy: 0, missing: 0, craft: 0, unit: n.unit };
-      a.required += n.required;
-      a.fromStock += n.fromStock;
-      if (n.mode === 'buy') a.buy += n.rest;
-      if (n.mode === 'none') a.missing += n.rest;
-      if (n.mode === 'craft') a.craft += n.rest;
-      a.unit = n.unit ?? a.unit;
+  function countCombos(n: Node): number {
+    return (n.viaCombo ? 1 : 0) + n.children.reduce((s, c) => s + countCombos(c), 0);
+  }
+
+  function flatten(n: Node, acc: Map<number, { buy: number; missing: number; unit: number | null }>, isRoot = true) {
+    if (!isRoot && n.rest > 0 && (n.mode === 'buy' || n.mode === 'none')) {
+      const a = acc.get(n.itemId) ?? { buy: 0, missing: 0, unit: n.unit };
+      if (n.mode === 'buy') a.buy += n.rest; else a.missing += n.rest;
       acc.set(n.itemId, a);
     }
     for (const c of n.children) flatten(c, acc, false);
@@ -154,49 +173,43 @@ export function mountCraft(root: HTMLElement, me: { id: string }) {
     listEl.innerHTML = sortedRecipes()
       .filter((r) => !q || nameOf(r.output_item_id).toLowerCase().includes(q))
       .map((r) => `<button class="recipe-link grade-${gradeOf(r.output_item_id)}${r.output_item_id === selected ? ' active' : ''}"
-          data-action="select" data-id="${r.output_item_id}">${escapeHtml(nameOf(r.output_item_id))}</button>`)
+          data-action="select" data-id="${r.output_item_id}">${escapeHtml(nameOf(r.output_item_id))}
+          ${r.combo_chance > 0 ? `<span class="combo-tag">combo ${Math.round(r.combo_chance * 100)} %</span>` : ''}</button>`)
       .join('') || '<p class="muted">Aucune recette.</p>';
 
     if (loadError) { mainEl.innerHTML = `<p class="error">Chargement impossible : ${escapeHtml(loadError)}</p>`; return; }
     if (selected == null) {
-      mainEl.innerHTML = `<div class="panel empty"><p>Aucune recette pour l’instant. Envoie une capture de la fenêtre « Crafting Materials » pour en créer une.</p></div>`;
+      mainEl.innerHTML = `<div class="panel empty"><p>Aucune recette pour l’instant.</p>
+        <button class="btn primary" data-action="new">Créer la première recette</button></div>`;
       return;
     }
 
     const target = selected;
-    const combo = comboContext(target);
-    const p = (comboPct ?? (combo ? combo.source.combo_chance * 100 : 0)) / 100;
-
-    // Scénarios : valeur marché (sans stock) et achats réels (avec stock)
-    const valueWorst = expand(target, count, null, [], true);
-    const buyWorst = expand(target, count, new Map(stock), [], true);
-    let valueCombo: Node | null = null;
-    let buyCombo: Node | null = null;
-    if (combo?.kind === 'skip') {
-      valueCombo = expand(combo.source.output_item_id, count, null, [], true);
-      buyCombo = expand(combo.source.output_item_id, count, new Map(stock), [], true);
-    }
-    const expected = valueCombo ? p * valueCombo.cost + (1 - p) * valueWorst.cost : valueWorst.cost;
-    const shown = plan === 'combo' && buyCombo ? buyCombo : buyWorst;
-    const materials = flatten(shown, new Map());
-    const shopping = [...materials.entries()].filter(([, m]) => m.buy > 0 || m.missing > 0);
+    const recipe = byOutput.get(target)!;
+    const valueNever = expand(target, count, null, [], 'never', true);
+    const valueAlways = expand(target, count, null, [], 'always', true);
+    const combos = countCombos(valueAlways);
+    const expected = combos ? expectedCost(target, count, [], true) : valueNever.cost;
+    const shown = expand(target, count, new Map(stock), [], combos ? plan : 'never', true);
+    const shopping = [...flatten(shown, new Map()).entries()];
     const toBuy = shown.cost;
     const missingKinah = Math.max(0, toBuy - kinah);
-    const unknown = unknownPrices(valueWorst);
+    const unknown = unknownPrices(valueNever);
 
-    const it = items.get(target);
-    const marketPrice = it ? it.current_price : null;
+    const marketPrice = items.get(target)?.current_price ?? null;
     const direct = marketPrice != null ? marketPrice * count : null;
     const margin = direct != null ? Math.round(direct * (1 - tax / 100) - expected) : null;
+    const anyCombo = combos > 0 || recipe.combo_chance > 0;
+    const pctShown = Math.round((comboPct ?? (recipes.find((r) => r.combo_chance > 0)?.combo_chance ?? 0.25) * 100));
 
     const card = (label: string, value: string, note = '', cls = '') =>
       `<div class="stat-card ${cls}"><span class="stat-label">${label}</span><span class="stat-value">${value}</span>${note ? `<span class="stat-note">${note}</span>` : ''}</div>`;
 
-    const costCards = valueCombo
-      ? card('Coût sans combo', `${formatKinah(valueWorst.cost)} k`)
-        + card('Coût avec combo', `${formatKinah(valueCombo.cost)} k`)
-        + card('Coût moyen attendu', `${formatKinah(Math.round(expected))} k`, `avec ${Math.round(p * 100)} % de combo`, 'highlight')
-      : card('Prix de revient', `${formatKinah(valueWorst.cost)} k`, 'valeur marché des composants', 'highlight');
+    const costCards = combos
+      ? card('Coût sans combo', `${formatKinah(valueNever.cost)} k`, 'aucun combo ne passe')
+        + card('Coût avec combo', `${formatKinah(valueAlways.cost)} k`, `${combos} étape${combos > 1 ? 's' : ''} sautée${combos > 1 ? 's' : ''}`)
+        + card('Coût moyen attendu', `${formatKinah(Math.round(expected))} k`, `avec ${pctShown} % de combo à chaque étape`, 'highlight')
+      : card('Prix de revient', `${formatKinah(valueNever.cost)} k`, 'valeur marché des composants', 'highlight');
 
     const tradeCards = direct == null
       ? card('Achat direct', 'Prix inconnu', 'ajoute un prix depuis la page Marché')
@@ -206,29 +219,31 @@ export function mountCraft(root: HTMLElement, me: { id: string }) {
     mainEl.innerHTML = `
       <div class="page-head">
         <h1 class="grade-${gradeOf(target)}">${escapeHtml(nameOf(target))}</h1>
+        <div class="row-end">
+          <button class="btn" data-action="duplicate">Dupliquer</button>
+          <button class="btn" data-action="edit">Modifier la recette</button>
+        </div>
       </div>
 
       <div class="panel settings">
         <label>Quantité à fabriquer <input type="number" min="1" max="999" value="${count}" data-set="count" /></label>
-        ${combo ? `<label>Chance de combo (%) <input type="number" min="0" max="100" step="1" value="${Math.round(p * 100)}" data-set="combo" /></label>` : ''}
+        ${anyCombo ? `<label>Chance de combo (%) <input type="number" min="0" max="100" step="1" value="${pctShown}" data-set="combo" /></label>` : ''}
         <label>Taxe de l’hôtel des ventes (%) <input type="number" min="0" max="50" step="0.5" value="${tax}" data-set="tax" /></label>
       </div>
 
-      ${combo?.kind === 'skip' ? `<p class="combo-note">${ICONS.up}<span>En craftant <strong>${escapeHtml(nameOf(combo.source.output_item_id))}</strong>,
-        ${Math.round(p * 100)} % de chance d’obtenir directement cet objet, sans passer par sa recette.</span></p>` : ''}
-      ${combo?.kind === 'bonus' ? `<p class="combo-note">${ICONS.up}<span>${Math.round(p * 100)} % de chance d’obtenir directement
-        <strong>${escapeHtml(nameOf(combo.source.combo_item_id!))}</strong> à la place.</span></p>` : ''}
+      ${recipe.combo_item_id && recipe.combo_chance > 0 ? `<p class="combo-note">${ICONS.up}<span>${Math.round(chance(recipe) * 100)} % de chance
+        d’obtenir directement <strong>${escapeHtml(nameOf(recipe.combo_item_id))}</strong> à la place.</span></p>` : ''}
 
       <div class="stat-cards">${costCards}${tradeCards}</div>
-      ${unknown.length ? `<p class="warn">Prix inconnu, compté à 0 : ${unknown.map(escapeHtml).join(', ')}. Ajoute un prix depuis la page Marché.</p>` : ''}
+      ${unknown.length ? `<p class="warn">Prix inconnu, compté à 0 : ${unknown.map(escapeHtml).join(', ')}.</p>` : ''}
 
       <section class="panel">
         <div class="panel-head">
           <h2>Arbre de fabrication</h2>
-          ${buyCombo ? `<label class="select-wrap"><span class="sr-only">Scénario</span>
+          ${combos ? `<label class="select-wrap"><span class="sr-only">Scénario</span>
             <select data-set="plan">
-              <option value="worst"${plan === 'worst' ? ' selected' : ''}>Prévoir sans combo</option>
-              <option value="combo"${plan === 'combo' ? ' selected' : ''}>Prévoir avec combo</option>
+              <option value="never"${plan === 'never' ? ' selected' : ''}>Prévoir sans combo</option>
+              <option value="always"${plan === 'always' ? ' selected' : ''}>Prévoir avec combo</option>
             </select>${ICONS.chevron}</label>` : ''}
         </div>
         <div class="table-wrap"><table class="tree">
@@ -263,11 +278,12 @@ export function mountCraft(root: HTMLElement, me: { id: string }) {
   function treeRows(n: Node, depth: number, isRoot = false): string {
     const label = escapeHtml(nameOf(n.itemId));
     let how: string;
-    if (isRoot) how = `Craft ×${n.crafts}`;
+    if (n.viaCombo) how = `<span class="combo-tag">Combo : en craftant ${escapeHtml(nameOf(n.children[0].itemId))}</span>`;
+    else if (isRoot) how = `Craft ×${n.crafts}`;
     else if (n.craftable) {
       const m = n.mode === 'craft' ? 'craft' : 'buy';
       how = `<div class="toggle" role="group" aria-label="Acheter ou crafter">
-        <button data-action="mode" data-id="${n.itemId}" data-mode="buy" aria-pressed="${m === 'buy'}"${canBuy(n.itemId) ? '' : ' disabled'}>Acheter</button>
+        <button data-action="mode" data-id="${n.itemId}" data-mode="buy" aria-pressed="${m === 'buy'}">Acheter</button>
         <button data-action="mode" data-id="${n.itemId}" data-mode="craft" aria-pressed="${m === 'craft'}">Crafter</button></div>`;
     } else how = n.mode === 'buy' ? 'Achat' : '<span class="muted">Introuvable</span>';
 
@@ -286,17 +302,51 @@ export function mountCraft(root: HTMLElement, me: { id: string }) {
       </tr>${n.children.map((c) => treeRows(c, depth + 1)).join('')}`;
   }
 
+  // ---------- Éditeur ----------
+  function draftFrom(r: Recipe | undefined, keepOutput: boolean): RecipeDraft {
+    if (!r) return { outputName: '', outputQty: 1, combo: false, comboPct: 25, comboName: '', components: [] };
+    return {
+      recipeId: keepOutput ? r.id : undefined,
+      outputName: keepOutput ? nameOf(r.output_item_id) : '',
+      outputQty: r.output_qty,
+      combo: r.combo_chance > 0,
+      comboPct: Math.round(r.combo_chance * 100) || 25,
+      comboName: keepOutput && r.combo_item_id ? nameOf(r.combo_item_id) : '',
+      components: r.recipe_components.map((c) => ({ name: nameOf(c.item_id), qty: c.qty })),
+    };
+  }
+
+  function editor(title: string, draft: RecipeDraft) {
+    openRecipeEditor({
+      title,
+      draft,
+      items: [...items.values()].sort((a, b) => a.name.localeCompare(b.name)),
+      hasRecipe: (id) => byOutput.has(id),
+      onSaved: async (outputId, next) => {
+        selected = outputId;
+        await load();
+        if (next && confirm(`Le combo donne « ${next.outputName} », qui n’a pas encore de recette. La créer maintenant ?`)) {
+          editor(`Recette : ${next.outputName}`, next);
+        }
+      },
+      onDeleted: async () => { selected = null; await load(); },
+    });
+  }
+
   // ---------- Événements ----------
   searchEl.addEventListener('input', () => { search = searchEl.value; render(); });
 
   root.addEventListener('click', (e) => {
     const el = (e.target as HTMLElement).closest<HTMLElement>('[data-action]');
     if (!el) return;
-    if (el.dataset.action === 'select') {
-      selected = Number(el.dataset.id); comboPct = null; plan = 'worst'; render();
-    }
-    if (el.dataset.action === 'mode') {
-      modes.set(Number(el.dataset.id), el.dataset.mode as Mode); render();
+    switch (el.dataset.action) {
+      case 'select': selected = Number(el.dataset.id); plan = 'never'; render(); break;
+      case 'mode': modes.set(Number(el.dataset.id), el.dataset.mode as Mode); render(); break;
+      case 'new': editor('Nouvelle recette', draftFrom(undefined, false)); break;
+      case 'edit': if (selected != null) editor('Modifier la recette', draftFrom(byOutput.get(selected), true)); break;
+      case 'duplicate':
+        if (selected != null) editor(`Nouvelle recette (copie de ${nameOf(selected)})`, draftFrom(byOutput.get(selected), false));
+        break;
     }
   });
 
@@ -306,7 +356,7 @@ export function mountCraft(root: HTMLElement, me: { id: string }) {
     if (set === 'count') count = Math.max(1, Math.min(999, Number(el.value) || 1));
     else if (set === 'combo') comboPct = Math.max(0, Math.min(100, Number(el.value) || 0));
     else if (set === 'tax') tax = Math.max(0, Math.min(50, Number(el.value) || 0));
-    else if (set === 'plan') plan = el.value as 'worst' | 'combo';
+    else if (set === 'plan') plan = el.value as Scenario;
     else if (set === 'kinah') {
       kinah = parseKinah(el.value) ?? 0;
       const { error } = await supabase.from('wallets').upsert({ kinah }, { onConflict: 'user_id' });

@@ -27,6 +27,7 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html { background: var(--bg); }
 body {
   margin: 0;
@@ -329,3 +330,20 @@ th .sub { display: block; color: var(--gold); text-transform: none; letter-spaci
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; animation: none !important; }
 }
+
+/* ---------- Éditeur de recette ---------- */
+.recipe-dialog .re-block { border: 1px solid var(--line); border-radius: 8px; padding: .9rem 1rem 1rem; margin: 0; display: flex; flex-direction: column; gap: .7rem; }
+.recipe-dialog legend { font: 600 .8rem/1 var(--head); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); padding: 0 .4rem; }
+.comp-list { display: flex; flex-direction: column; gap: .5rem; }
+.comp-main { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
+.comp-main input[data-role=name] { flex: 1; min-width: 14rem; }
+.comp-main input[data-role=qty] { width: 6rem; }
+.recipe-dialog .new-fields { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; margin-top: .4rem; grid-template-columns: none; }
+.recipe-dialog .new-fields[hidden] { display: none; }
+.new-hint { font-size: .8rem; color: var(--blue) !important; }
+label.inline { flex-direction: row; align-items: center; gap: .5rem; }
+label.inline input { width: 6.5rem; }
+.btn.danger { color: var(--down); }
+.combo-tag { display: inline-block; font-size: .72rem; padding: .05rem .4rem; margin-left: .35rem; border-radius: 4px; background: rgb(74 168 240 / .15); color: var(--blue); white-space: nowrap; }
+.dialog.wide { width: min(46rem, 96vw); max-height: 92vh; }
+.review-foot { display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; }
