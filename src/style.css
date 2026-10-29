@@ -415,3 +415,17 @@ label.inline input { width: 6.5rem; }
 .btn.cyan-outline:hover { background: rgb(60 184 234 / .12); }
 .how { display: flex; align-items: center; gap: .4rem; flex-wrap: wrap; }
 .short-row td { background: rgb(240 85 92 / .06); }
+
+/* Ordre des recettes */
+.list-head { display: flex; justify-content: space-between; align-items: center; gap: .5rem; }
+.reorder-bar { display: flex; flex-direction: column; gap: .5rem; padding: .6rem; border: 1px dashed var(--line); border-radius: 6px; }
+.reorder-bar p { margin: 0; font-size: .8rem; }
+.recipe-row { display: flex; align-items: stretch; gap: .3rem; }
+.recipe-row .recipe-link { flex: 1; min-width: 0; }
+.move { display: flex; flex-direction: column; gap: .15rem; justify-content: center; }
+.move button {
+  width: 1.6rem; height: 1.3rem; padding: 0; font-size: .65rem; cursor: pointer;
+  border: 1px solid var(--line); border-radius: 4px; background: var(--panel-2); color: var(--text);
+}
+.move button:hover:not(:disabled) { border-color: var(--gold); color: var(--gold); }
+.move button:disabled { opacity: .3; cursor: not-allowed; }

@@ -11,6 +11,7 @@ interface Recipe {
   combo_chance: number;
   combo_item_id: number | null;
   craft_type: CraftTypeKey | null;
+  sort_order: number | null;
   recipe_components: { item_id: number; qty: number }[];
 }
 
@@ -48,6 +49,8 @@ export function mountCraft(root: HTMLElement, me: { id: string }) {
   let prof: ProfessionKey | 'none' = 'blacksmithing';
   let sub: CraftTypeKey | 'all' = 'all';
   let firstLoad = true;
+  let reorder = false;
+  let shownOrder: Recipe[] = [];
   const modes = new Map<number, Mode>();
   const collapsed = new Set<string>(); // étapes réduites dans l'arbre (chemin d'objets)
   let foldable: string[] = [];
@@ -59,7 +62,12 @@ export function mountCraft(root: HTMLElement, me: { id: string }) {
     </div>
     <div class="craft">
     <aside class="panel recipe-list">
-      <h2 class="list-title">Recettes</h2>
+      <div class="list-head"><h2 class="list-title">Recettes</h2>
+        <button class="btn ghost small" data-action="reorder">Réorganiser</button></div>
+      <div class="reorder-bar" hidden>
+        <p class="muted">Déplace les recettes avec ▲ ▼. L’ordre est enregistré pour tout le groupe.</p>
+        <button class="btn small" data-action="auto-order">Ordre automatique</button>
+      </div>
       <button class="btn primary" data-action="new">Nouvelle recette</button>
       <input type="search" class="search" placeholder="Chercher une recette" aria-label="Chercher une recette" />
       <nav class="recipe-links"></nav>
@@ -76,7 +84,7 @@ export function mountCraft(root: HTMLElement, me: { id: string }) {
   async function load() {
     const [it, rc, inv, wal] = await Promise.all([
       supabase.from('item_overview').select('*'),
-      supabase.from('recipes').select('id, output_item_id, output_qty, combo_chance, combo_item_id, craft_type, recipe_components(item_id, qty)'),
+      supabase.from('recipes').select('id, output_item_id, output_qty, combo_chance, combo_item_id, craft_type, sort_order, recipe_components(item_id, qty)'),
       supabase.from('inventories').select('item_id, qty').eq('user_id', me.id),
       supabase.from('wallets').select('kinah').maybeSingle(),
     ]);
@@ -97,6 +105,42 @@ export function mountCraft(root: HTMLElement, me: { id: string }) {
       firstLoad = false;
     }
     render();
+  }
+
+  /** Ordre automatique : chaque recette après celles dont elle utilise l'objet, en suivant la chaîne. */
+  function autoOrder(list: Recipe[]): Recipe[] {
+    const ids = new Set(list.map((r) => r.output_item_id));
+    const deps = new Map(list.map((r) => [r.id,
+      r.recipe_components.map((c) => c.item_id).filter((id) => ids.has(id) && id !== r.output_item_id)]));
+    const byName = [...list].sort((a, b) => nameOf(a.output_item_id).localeCompare(nameOf(b.output_item_id)));
+    const placed = new Set<number>();
+    const out: Recipe[] = [];
+    while (out.length < list.length) {
+      const ready = byName.filter((r) => !placed.has(r.output_item_id) && deps.get(r.id)!.every((d) => placed.has(d)));
+      const last = out[out.length - 1];
+      const next = (last && (ready.find((r) => r.output_item_id === last.combo_item_id)
+          ?? ready.find((r) => deps.get(r.id)!.includes(last.output_item_id))))
+        ?? ready[0]
+        ?? byName.find((r) => !placed.has(r.output_item_id))!; // dépendance circulaire
+      out.push(next);
+      placed.add(next.output_item_id);
+    }
+    return out;
+  }
+
+  /** Ordre affiché : l'ordre manuel enregistré, les recettes sans ordre ajoutées à la suite en ordre automatique. */
+  function orderList(list: Recipe[]): Recipe[] {
+    const auto = autoOrder(list);
+    const max = Math.max(0, ...list.map((r) => r.sort_order ?? 0));
+    const key = (r: Recipe) => r.sort_order ?? max + 1 + auto.indexOf(r);
+    return [...list].sort((a, b) => key(a) - key(b));
+  }
+
+  async function saveOrder(list: Recipe[]) {
+    list.forEach((r, i) => { r.sort_order = i + 1; });
+    render();
+    const { error } = await supabase.rpc('reorder_recipes', { ids: list.map((r) => r.id) });
+    if (error) alert(`Enregistrement de l’ordre impossible : ${error.message}`);
   }
 
   const nameOf = (id: number) => items.get(id)?.name ?? `Objet n°${id}`;
@@ -208,17 +252,24 @@ export function mountCraft(root: HTMLElement, me: { id: string }) {
     subNav.hidden = prof === 'none';
 
     const inRubric = (r: Recipe) => (professionOf(r.craft_type) ?? 'none') === prof && (sub === 'all' || r.craft_type === sub);
-    const shownRecipes = sortedRecipes().filter((r) => (q ? nameOf(r.output_item_id).toLowerCase().includes(q) : inRubric(r)));
+    const shownRecipes = orderList(recipes.filter((r) => (q ? nameOf(r.output_item_id).toLowerCase().includes(q) : inRubric(r))));
+    shownOrder = shownRecipes;
     if (!q && (selected == null || !shownRecipes.some((r) => r.output_item_id === selected))) {
       selected = shownRecipes[0]?.output_item_id ?? null;
     }
     titleEl.textContent = q ? 'Résultats de recherche'
       : prof === 'none' ? 'Non classées'
       : sub === 'all' ? (PROFESSIONS.find((p) => p.key === prof)?.label ?? '') : craftTypeLabel(sub);
-    listEl.innerHTML = shownRecipes.map((r) => `<button class="recipe-link grade-${gradeOf(r.output_item_id)}${r.output_item_id === selected ? ' active' : ''}"
+    root.querySelector<HTMLElement>('.reorder-bar')!.hidden = !reorder;
+    root.querySelector<HTMLElement>('[data-action=reorder]')!.textContent = reorder ? 'Terminé' : 'Réorganiser';
+    listEl.classList.toggle('reordering', reorder);
+    listEl.innerHTML = shownRecipes.map((r, i) => `<div class="recipe-row">${reorder ? `<div class="move">
+          <button data-action="move" data-dir="-1" data-index="${i}" aria-label="Monter"${i === 0 ? ' disabled' : ''}>▲</button>
+          <button data-action="move" data-dir="1" data-index="${i}" aria-label="Descendre"${i === shownRecipes.length - 1 ? ' disabled' : ''}>▼</button>
+        </div>` : ''}<button class="recipe-link grade-${gradeOf(r.output_item_id)}${r.output_item_id === selected ? ' active' : ''}"
           data-action="select" data-id="${r.output_item_id}">${escapeHtml(nameOf(r.output_item_id))}
           <span class="recipe-meta">${q || sub === 'all' ? `<span class="type-tag">${craftTypeLabel(r.craft_type)}</span>` : ''}
-          ${r.combo_chance > 0 ? `<span class="combo-tag">combo ${Math.round(r.combo_chance * 100)} %</span>` : ''}</span></button>`)
+          ${r.combo_chance > 0 ? `<span class="combo-tag">combo ${Math.round(r.combo_chance * 100)} %</span>` : ''}</span></button></div>`)
       .join('') || `<p class="muted">${q ? 'Aucune recette ne correspond.' : 'Aucune recette dans cette rubrique.'}</p>`;
 
     if (loadError) { mainEl.innerHTML = `<p class="error">Chargement impossible : ${escapeHtml(loadError)}</p>`; return; }
@@ -522,6 +573,17 @@ export function mountCraft(root: HTMLElement, me: { id: string }) {
         break;
       }
       case 'expand-all': collapsed.clear(); render(); break;
+      case 'reorder': reorder = !reorder; render(); break;
+      case 'move': {
+        const i = Number(el.dataset.index);
+        const j = i + Number(el.dataset.dir);
+        const list = [...shownOrder];
+        if (j < 0 || j >= list.length) break;
+        [list[i], list[j]] = [list[j], list[i]];
+        void saveOrder(list);
+        break;
+      }
+      case 'auto-order': void saveOrder(autoOrder(shownOrder)); break;
       case 'crafted': openCraftedDialog(Number(el.dataset.id), Number(el.dataset.n) || 1); break;
       case 'stock-inc': case 'stock-dec': {
         const id = Number(el.dataset.id);
