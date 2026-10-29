@@ -264,6 +264,7 @@ export function mountCraft(root: HTMLElement, me: { id: string }) {
       <div class="page-head">
         <h1 class="grade-${gradeOf(target)}">${escapeHtml(nameOf(target))}</h1>
         <div class="row-end">
+          <button class="btn cyan-outline" data-action="crafted" data-id="${target}" data-n="${count}">J’ai crafté</button>
           <button class="btn" data-action="duplicate">Dupliquer</button>
           <button class="btn" data-action="edit">Modifier la recette</button>
         </div>
@@ -330,9 +331,11 @@ export function mountCraft(root: HTMLElement, me: { id: string }) {
     else if (isRoot) how = `Craft ×${n.crafts}`;
     else if (n.craftable) {
       const m = n.mode === 'craft' ? 'craft' : 'buy';
-      how = `<div class="toggle" role="group" aria-label="Acheter ou crafter">
+      how = `<div class="how"><div class="toggle" role="group" aria-label="Acheter ou crafter">
         <button data-action="mode" data-id="${n.itemId}" data-mode="buy" aria-pressed="${m === 'buy'}">Acheter</button>
-        <button data-action="mode" data-id="${n.itemId}" data-mode="craft" aria-pressed="${m === 'craft'}">Crafter</button></div>`;
+        <button data-action="mode" data-id="${n.itemId}" data-mode="craft" aria-pressed="${m === 'craft'}">Crafter</button></div>
+        ${m === 'craft' ? `<button class="btn small" data-action="crafted" data-id="${n.itemId}" data-n="${Math.max(1, n.crafts)}"
+          title="Retirer du stock les composants de ce craft">Crafté</button>` : ''}</div>`;
     } else how = n.mode === 'buy' ? 'Achat' : '<span class="muted">Introuvable</span>';
 
     const have = stock.get(n.itemId) ?? 0;
@@ -422,6 +425,85 @@ export function mountCraft(root: HTMLElement, me: { id: string }) {
     }, 400));
   }
 
+  // ---------- « J'ai crafté » : retire les composants du stock ----------
+  function openCraftedDialog(itemId: number, initialCrafts: number) {
+    const recipe = byOutput.get(itemId);
+    if (!recipe) return;
+    const comboItem = recipe.combo_item_id && recipe.combo_chance > 0 ? recipe.combo_item_id : null;
+    const dialog = document.createElement('dialog');
+    dialog.className = 'dialog wide';
+    document.body.append(dialog);
+    let crafts = initialCrafts;
+
+    const rowsHtml = () => recipe.recipe_components.map((c) => {
+      const need = c.qty * crafts;
+      const have = stock.get(c.item_id) ?? 0;
+      const after = Math.max(0, have - need);
+      return `<tr class="${have < need ? 'short-row' : ''}">
+        <td><span class="item-name grade-${gradeOf(c.item_id)}">${escapeHtml(nameOf(c.item_id))}</span></td>
+        <td class="num">−${need}</td><td class="num">${have}</td>
+        <td class="num"><strong>${after}</strong>${have < need ? `<small class="trend down"> (il en manquait ${need - have})</small>` : ''}</td>
+      </tr>`;
+    }).join('');
+
+    dialog.innerHTML = `<form class="stack">
+      <h2>J’ai crafté : ${escapeHtml(nameOf(itemId))}</h2>
+      <label class="inline">Nombre de crafts <input type="number" name="crafts" min="1" max="999" value="${crafts}" /></label>
+      <div class="table-wrap"><table class="materials">
+        <thead><tr><th>Composant retiré</th><th class="num">Quantité</th><th class="num">Stock actuel</th><th class="num">Stock après</th></tr></thead>
+        <tbody class="crafted-rows">${rowsHtml()}</tbody>
+      </table></div>
+      <fieldset class="re-block">
+        <legend>Objet obtenu</legend>
+        <label class="check"><input type="radio" name="result" value="${itemId}" checked /> ${escapeHtml(nameOf(itemId))}</label>
+        ${comboItem ? `<label class="check"><input type="radio" name="result" value="${comboItem}" /> ${escapeHtml(nameOf(comboItem))} <span class="combo-tag">combo</span></label>` : ''}
+        <label class="check"><input type="checkbox" name="addOutput" checked /> Ajouter l’objet obtenu à mon stock</label>
+      </fieldset>
+      <p class="error" hidden></p>
+      <div class="row-end">
+        <button type="button" class="btn ghost" data-close>Annuler</button>
+        <button type="submit" class="btn primary">Retirer du stock</button>
+      </div>
+    </form>`;
+
+    const form = dialog.querySelector('form')!;
+    form.querySelector<HTMLInputElement>('input[name=crafts]')!.addEventListener('input', (e) => {
+      crafts = Math.max(1, Math.min(999, Math.floor(Number((e.target as HTMLInputElement).value) || 1)));
+      dialog.querySelector('.crafted-rows')!.innerHTML = rowsHtml();
+    });
+    dialog.querySelector('[data-close]')!.addEventListener('click', () => dialog.close());
+    dialog.addEventListener('close', () => dialog.remove());
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const fd = new FormData(form);
+      const resultId = Number(fd.get('result'));
+      const changes = new Map<number, number>();
+      for (const c of recipe.recipe_components) {
+        changes.set(c.item_id, Math.max(0, (changes.get(c.item_id) ?? stock.get(c.item_id) ?? 0) - c.qty * crafts));
+      }
+      if (fd.get('addOutput') === 'on') {
+        changes.set(resultId, (changes.get(resultId) ?? stock.get(resultId) ?? 0) + recipe.output_qty * crafts);
+      }
+      const now = new Date().toISOString();
+      const { error } = await supabase.from('inventories').upsert(
+        [...changes.entries()].map(([item_id, qty]) => ({ item_id, qty, updated_at: now })),
+        { onConflict: 'user_id,item_id' },
+      );
+      if (error) {
+        const p = form.querySelector<HTMLElement>('.error')!;
+        p.hidden = false;
+        p.textContent = `Mise à jour du stock impossible : ${error.message}`;
+        return;
+      }
+      for (const [id, qty] of changes) stock.set(id, qty);
+      dialog.close();
+      render();
+    });
+
+    dialog.showModal();
+  }
+
   // ---------- Événements ----------
   searchEl.addEventListener('input', () => { search = searchEl.value; render(); });
 
@@ -440,6 +522,7 @@ export function mountCraft(root: HTMLElement, me: { id: string }) {
         break;
       }
       case 'expand-all': collapsed.clear(); render(); break;
+      case 'crafted': openCraftedDialog(Number(el.dataset.id), Number(el.dataset.n) || 1); break;
       case 'stock-inc': case 'stock-dec': {
         const id = Number(el.dataset.id);
         setStock(id, (stock.get(id) ?? 0) + (el.dataset.action === 'stock-inc' ? 1 : -1));

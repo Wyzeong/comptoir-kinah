@@ -332,8 +332,8 @@ th .sub { display: block; color: var(--gold); text-transform: none; letter-spaci
 }
 
 /* ---------- Éditeur de recette ---------- */
-.recipe-dialog .re-block { border: 1px solid var(--line); border-radius: 8px; padding: .9rem 1rem 1rem; margin: 0; display: flex; flex-direction: column; gap: .7rem; }
-.recipe-dialog legend { font: 600 .8rem/1 var(--head); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); padding: 0 .4rem; }
+.dialog .re-block { border: 1px solid var(--line); border-radius: 8px; padding: .9rem 1rem 1rem; margin: 0; display: flex; flex-direction: column; gap: .7rem; }
+.dialog legend { font: 600 .8rem/1 var(--head); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); padding: 0 .4rem; }
 .comp-list { display: flex; flex-direction: column; gap: .5rem; }
 .comp-main { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
 .comp-main input[data-role=name] { flex: 1; min-width: 14rem; }
@@ -409,3 +409,9 @@ label.inline input { width: 6.5rem; }
 .tree td:first-child { min-width: 19rem; }
 .tree .tree-name { flex-wrap: nowrap; }
 .used-before { display: block; font-size: .72rem; color: var(--muted); margin-top: .15rem; white-space: nowrap; }
+
+/* « J'ai crafté » */
+.btn.cyan-outline { border-color: var(--cyan); color: var(--cyan); background: transparent; }
+.btn.cyan-outline:hover { background: rgb(60 184 234 / .12); }
+.how { display: flex; align-items: center; gap: .4rem; flex-wrap: wrap; }
+.short-row td { background: rgb(240 85 92 / .06); }
